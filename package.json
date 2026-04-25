@@ -1,7 +1,7 @@
 {
   "name": "rexa",
-  "version": "0.1.0",
-  "description": "Rexa personal autonomous AI assistant foundation",
+  "version": "0.2.0",
+  "description": "Rexa — personal autonomous AI assistant",
   "private": true,
   "main": "dist/index.js",
   "bin": {
@@ -13,8 +13,12 @@
     "chat": "tsx src/index.ts chat",
     "doctor": "tsx src/index.ts doctor",
     "demo": "tsx src/index.ts demo-flow",
+    "telegram": "tsx src/index.ts telegram",
+    "whatsapp": "tsx src/index.ts whatsapp",
+    "ws": "tsx src/index.ts ws",
+    "web": "tsx src/index.ts web",
+    "api": "tsx src/index.ts api",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -23,28 +27,15 @@
   "devDependencies": {
     "@types/node": "^20.12.12",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.4"
+    "typescript": "^5.6.3"
   },
   "peerDependenciesMeta": {
-    "better-sqlite3": {
-      "optional": true
-    },
-    "pg": {
-      "optional": true
-    },
-    "playwright": {
-      "optional": true
-    },
-    "puppeteer": {
-      "optional": true
-    },
-    "telegraf": {
-      "optional": true
-    },
-    "ws": {
-      "optional": true
-    }
+    "better-sqlite3": { "optional": true },
+    "pg": { "optional": true },
+    "playwright": { "optional": true },
+    "puppeteer": { "optional": true },
+    "telegraf": { "optional": true },
+    "ws": { "optional": true }
   },
   "dependencies": {
     "telegraf": "^4.16.3",

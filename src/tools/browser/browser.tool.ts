@@ -1,6 +1,6 @@
 import { fail, ok, type ToolResult } from "../../common/result";
 import { browserScreenshotPath, type BrowserAction, type BrowserAgentReportingOptions } from "./browser-agent-observer";
-import { PlaywrightAdapter } from "./playwright.adapter";
+import { ChromiumAdapter } from "./chromium.adapter";
 
 export interface BrowserAdapter {
   open(url: string): Promise<void>;
@@ -17,11 +17,22 @@ export interface BrowserAdapter {
   findElement(query: string): Promise<unknown>;
   waitForNavigation(): Promise<void>;
   close(): Promise<void>;
+  /** Optional power-features. Adapters that don't support these should throw. */
+  waitForSelector?(selector: string, timeoutMs?: number): Promise<void>;
+  waitForText?(text: string, timeoutMs?: number): Promise<void>;
+  evaluate?<T = unknown>(fn: string | ((...args: unknown[]) => T), ...args: unknown[]): Promise<T>;
+  pdf?(path: string): Promise<string>;
+  cookies?(): Promise<unknown[]>;
+  setCookies?(cookies: Array<Record<string, unknown>>): Promise<void>;
+  newPage?(): Promise<unknown>;
+  pages?(): Promise<unknown[]>;
+  setViewport?(width: number, height: number): Promise<void>;
+  setUserAgent?(userAgent: string): Promise<void>;
 }
 
 export class BrowserTool {
   constructor(
-    private readonly adapter: BrowserAdapter = new PlaywrightAdapter(),
+    private readonly adapter: BrowserAdapter = new ChromiumAdapter(),
     private readonly reporting: BrowserAgentReportingOptions = {},
   ) {}
 
@@ -57,7 +68,11 @@ export class BrowserTool {
     }
   }
 
-  async click(x: number, y: number, options: { confirmed?: boolean; publicAction?: boolean } = {}): Promise<ToolResult<{ x: number; y: number }>> {
+  async click(
+    x: number,
+    y: number,
+    options: { confirmed?: boolean; publicAction?: boolean } = {},
+  ): Promise<ToolResult<{ x: number; y: number }>> {
     if (options.publicAction && !options.confirmed) {
       return fail("CONFIRMATION_REQUIRED", "Public browser action requires confirmation", {
         recoverable: true,
@@ -112,7 +127,10 @@ export class BrowserTool {
     }
   }
 
-  async scroll(direction: "up" | "down", amount: number): Promise<ToolResult<{ direction: string; amount: number }>> {
+  async scroll(
+    direction: "up" | "down",
+    amount: number,
+  ): Promise<ToolResult<{ direction: string; amount: number }>> {
     try {
       await this.adapter.scroll(direction, amount);
       await this.report("scroll", `Scroll ${direction} sejauh ${amount}.`, { metadata: { direction, amount } });
@@ -138,6 +156,105 @@ export class BrowserTool {
     }
   }
 
+  async waitForSelector(selector: string, timeoutMs?: number): Promise<ToolResult<{ selector: string }>> {
+    if (!this.adapter.waitForSelector) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung waitForSelector", { recoverable: true });
+    }
+    try {
+      await this.adapter.waitForSelector(selector, timeoutMs);
+      await this.report("waitForSelector", `Menunggu selector: ${selector}`, { selector });
+      return ok({ selector });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async waitForText(text: string, timeoutMs?: number): Promise<ToolResult<{ text: string }>> {
+    if (!this.adapter.waitForText) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung waitForText", { recoverable: true });
+    }
+    try {
+      await this.adapter.waitForText(text, timeoutMs);
+      await this.report("waitForText", `Menunggu teks: ${text}`, { metadata: { text } });
+      return ok({ text });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async evaluate(script: string): Promise<ToolResult<{ result: unknown }>> {
+    if (!this.adapter.evaluate) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung evaluate", { recoverable: true });
+    }
+    try {
+      const result = await this.adapter.evaluate(script);
+      await this.report("evaluate", `Evaluasi script di halaman.`, { metadata: { length: script.length } });
+      return ok({ result });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async pdf(path: string): Promise<ToolResult<{ path: string }>> {
+    if (!this.adapter.pdf) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung pdf export", { recoverable: true });
+    }
+    try {
+      const saved = await this.adapter.pdf(path);
+      await this.report("pdf", `Export PDF: ${saved}`, { metadata: { path: saved } });
+      return ok({ path: saved });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async cookies(): Promise<ToolResult<{ cookies: unknown[] }>> {
+    if (!this.adapter.cookies) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung cookies", { recoverable: true });
+    }
+    try {
+      return ok({ cookies: await this.adapter.cookies() });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async setCookies(cookies: Array<Record<string, unknown>>): Promise<ToolResult<{ count: number }>> {
+    if (!this.adapter.setCookies) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung setCookies", { recoverable: true });
+    }
+    try {
+      await this.adapter.setCookies(cookies);
+      return ok({ count: cookies.length });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async setViewport(width: number, height: number): Promise<ToolResult<{ width: number; height: number }>> {
+    if (!this.adapter.setViewport) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung setViewport", { recoverable: true });
+    }
+    try {
+      await this.adapter.setViewport(width, height);
+      return ok({ width, height });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  async setUserAgent(userAgent: string): Promise<ToolResult<{ userAgent: string }>> {
+    if (!this.adapter.setUserAgent) {
+      return fail("BROWSER_FEATURE_UNSUPPORTED", "Adapter tidak mendukung setUserAgent", { recoverable: true });
+    }
+    try {
+      await this.adapter.setUserAgent(userAgent);
+      return ok({ userAgent });
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
   async close(): Promise<ToolResult<{ closed: true }>> {
     try {
       await this.adapter.close();
@@ -155,9 +272,21 @@ export class BrowserTool {
   ): Promise<void> {
     if (!this.reporting.observer) return;
     try {
-      const allowed = this.reporting.updateAfterActions ?? ["open", "click", "moveMouse", "type", "scroll", "uploadFile"];
+      const allowed = this.reporting.updateAfterActions ?? [
+        "open",
+        "click",
+        "moveMouse",
+        "type",
+        "scroll",
+        "uploadFile",
+      ];
       let screenshotPath = event.screenshotPath;
-      if (this.reporting.screenshotUpdates && allowed.includes(action) && action !== "screenshot" && action !== "close") {
+      if (
+        this.reporting.screenshotUpdates &&
+        allowed.includes(action) &&
+        action !== "screenshot" &&
+        action !== "close"
+      ) {
         screenshotPath = await browserScreenshotPath(this.reporting.screenshotDir ?? "data/browser-screenshots", action);
         await this.adapter.screenshot(screenshotPath);
       }

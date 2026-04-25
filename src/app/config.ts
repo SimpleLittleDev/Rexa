@@ -15,7 +15,7 @@ export interface AppConfig {
   maxLLMCostPerTask: number;
   maxMemoryChunks: number;
   enabledChatProviders: string[];
-  browserMode: "playwright" | "termux-chromium" | "remote-browser" | "limited";
+  browserMode: "chromium" | "playwright" | "remote-browser" | "auto" | "limited";
   chatProviders: ChatProvidersConfig;
   browserAgent: BrowserAgentConfig;
 }
@@ -108,7 +108,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function defaultAppConfig(): AppConfig {
   return {
     name: "Rexa",
-    version: "0.1.0",
+    version: "0.2.0",
     permissionMode: "balanced",
     maxToolCallsPerTask: 30,
     maxSubAgents: 3,
@@ -117,7 +117,7 @@ export function defaultAppConfig(): AppConfig {
     maxLLMCostPerTask: 1,
     maxMemoryChunks: 8,
     enabledChatProviders: ["cli"],
-    browserMode: "limited",
+    browserMode: "auto",
     chatProviders: {
       cli: { enabled: true },
       telegram: { enabled: false, tokenEnv: "TELEGRAM_BOT_TOKEN" },
@@ -146,13 +146,14 @@ export function defaultAppConfig(): AppConfig {
 export function defaultModelsConfig(): ModelsRouterConfig {
   return {
     roles: {
-      main: { provider: "mock", model: "local-mock-main" },
-      coding: { provider: "mock", model: "local-mock-coding" },
-      browser: { provider: "mock", model: "local-mock-browser" },
-      cheap: { provider: "mock", model: "local-mock-cheap" },
+      main: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "ollama", "mock"] },
+      coding: { provider: "anthropic", model: "claude-sonnet-4-20250514", fallbackProviders: ["openai", "openrouter", "mock"] },
+      browser: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "mock"] },
+      research: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "mock"] },
+      cheap: { provider: "openai", model: "gpt-4.1-mini", fallbackProviders: ["openrouter", "ollama", "mock"] },
       fallback: { provider: "mock", model: "local-mock-fallback" },
     },
-    fallbackOrder: ["mock"],
+    fallbackOrder: ["openai", "anthropic", "openrouter", "ollama", "mock"],
   };
 }
 
@@ -161,8 +162,8 @@ export function defaultAgentsConfig(): AgentsConfig {
     mainAgent: {
       name: "Rexa",
       role: "main-orchestrator",
-      provider: "mock",
-      model: "local-mock-main",
+      provider: "openai",
+      model: "gpt-4.1",
       tools: ["browser", "terminal", "file", "memory", "subagent"],
       memoryScope: "global",
       budget: { maxToolCalls: 30, maxExecutionTimeMs: 600_000, maxCostUsd: 1 },

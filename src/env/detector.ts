@@ -23,7 +23,7 @@ export interface EnvironmentInfo {
     chromium: boolean;
     googleChrome: boolean;
     playwrightPackage: boolean;
-    recommendedMode: "playwright" | "termux-chromium" | "remote-browser" | "limited";
+    recommendedMode: "chromium" | "playwright" | "remote-browser" | "auto" | "limited";
   };
 }
 
@@ -34,7 +34,7 @@ export class EnvironmentDetector {
     const isTermux = Boolean(process.env.PREFIX?.includes("com.termux") || process.env.TERMUX_VERSION || process.env.ANDROID_ROOT);
     const chromium = Boolean(commands.chromium || commands["chromium-browser"]);
     const googleChrome = Boolean(commands["google-chrome"]);
-    const playwrightPackage = await packageResolvable("playwright");
+    const playwrightPackage = await packageResolvable("playwright") || await packageResolvable("playwright-core");
 
     return {
       os: platform(),
@@ -54,7 +54,7 @@ export class EnvironmentDetector {
         chromium,
         googleChrome,
         playwrightPackage,
-        recommendedMode: recommendBrowserMode({ isTermux, chromium, googleChrome, playwrightPackage }),
+        recommendedMode: recommendBrowserMode({ chromium, googleChrome, playwrightPackage }),
       },
     };
   }
@@ -104,13 +104,12 @@ async function writableDirs(paths: string[]): Promise<string[]> {
 }
 
 function recommendBrowserMode(input: {
-  isTermux: boolean;
   chromium: boolean;
   googleChrome: boolean;
   playwrightPackage: boolean;
 }): EnvironmentInfo["browser"]["recommendedMode"] {
-  if (input.playwrightPackage && (input.chromium || input.googleChrome || !input.isTermux)) return "playwright";
-  if (input.isTermux && input.chromium) return "termux-chromium";
-  if (input.isTermux) return "remote-browser";
-  return "limited";
+  if (input.playwrightPackage && (input.chromium || input.googleChrome)) return "chromium";
+  if (input.playwrightPackage) return "playwright";
+  if (input.chromium || input.googleChrome) return "chromium";
+  return "remote-browser";
 }

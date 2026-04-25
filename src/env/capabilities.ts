@@ -14,13 +14,15 @@ export class CapabilityDetector {
 
   async detect(): Promise<RuntimeCapabilities> {
     const environment = await this.detector.detect();
+    const canUseLocalBrowser =
+      environment.browser.recommendedMode === "chromium" || environment.browser.recommendedMode === "playwright";
     return {
       environment,
       canUseTerminal: true,
-      canUseLocalBrowser: environment.browser.recommendedMode === "playwright" || environment.browser.recommendedMode === "termux-chromium",
+      canUseLocalBrowser,
       canUseRemoteBrowser: true,
       canUseSQLite: true,
-      defaultStorage: environment.isTermux ? "json" : "sqlite",
+      defaultStorage: "sqlite",
     };
   }
 }

@@ -115,8 +115,11 @@ export class Orchestrator {
 
     const response = await this.router.generateForRole(plan.recommendedRole, {
       messages: [
-        { role: "system", content: "You are Rexa, a concise personal autonomous AI assistant. Do not reveal private chain-of-thought." },
-        { role: "user", content: `User request: ${message}\n\nMemory:\n${memoryContext}${subagentSummary}` },
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `User request: ${message}\n\nDetected intent: ${plan.intent.type} (multiStep=${plan.intent.multiStep}, risk=${plan.intent.risk})\n\nPlanner steps:\n${plan.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n\nRelevant memory:\n${memoryContext || "(empty)"}${subagentSummary}`,
+        },
       ],
     });
 
@@ -151,6 +154,17 @@ export class Orchestrator {
     return (await workflow.run(message)).summary;
   }
 }
+
+const SYSTEM_PROMPT = [
+  "You are Rexa, a personal autonomous AI assistant.",
+  "You are versatile across coding, research, writing, analysis, math, planning, browser automation, terminal tasks, data wrangling and creative ideation.",
+  "Always respond in the same language as the user (Bahasa Indonesia or English).",
+  "Be concise but thorough; lead with the answer or action and then provide a brief justification.",
+  "Use the planner steps as a checklist – complete the relevant ones and skip those that don't apply.",
+  "When you are unsure or risk irreversible actions (sending, publishing, deleting, paying), ask for confirmation first.",
+  "Cite sources or quote evidence when you have them; if memory is empty, state assumptions clearly.",
+  "Never reveal private chain-of-thought; share only the final reasoning and conclusions the user needs.",
+].join(" ");
 
 function initialTaskState(taskId: string, userId: string): TaskState {
   return {

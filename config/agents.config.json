@@ -2,15 +2,9 @@
   "mainAgent": {
     "name": "Rexa",
     "role": "main-orchestrator",
-    "provider": "codex-cli",
-    "model": "gpt-5.5",
-    "tools": [
-      "browser",
-      "terminal",
-      "file",
-      "memory",
-      "subagent"
-    ],
+    "provider": "openai",
+    "model": "gpt-4.1",
+    "tools": ["browser", "terminal", "file", "memory", "subagent"],
     "memoryScope": "global",
     "budget": {
       "maxToolCalls": 30,
@@ -22,12 +16,7 @@
     "enabled": true,
     "sameProviderAsMain": true,
     "maxAgents": 3,
-    "allowedTools": [
-      "browser",
-      "terminal",
-      "file",
-      "memory"
-    ],
+    "allowedTools": ["browser", "terminal", "file", "memory"],
     "defaultMemoryScope": "task-only",
     "defaultBudget": {
       "maxToolCalls": 10,

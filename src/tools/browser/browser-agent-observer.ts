@@ -1,7 +1,19 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-export type BrowserAction = "open" | "click" | "moveMouse" | "type" | "scroll" | "uploadFile" | "screenshot" | "close";
+export type BrowserAction =
+  | "open"
+  | "click"
+  | "moveMouse"
+  | "type"
+  | "scroll"
+  | "uploadFile"
+  | "screenshot"
+  | "close"
+  | "waitForSelector"
+  | "waitForText"
+  | "evaluate"
+  | "pdf";
 
 export interface BrowserAgentEvent {
   action: BrowserAction;

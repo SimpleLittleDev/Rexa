@@ -1,8 +1,15 @@
 # Rexa
 
-Rexa adalah fondasi awal Personal Autonomous AI Assistant: modular, adaptive, cross-platform, multi-provider, punya tool layer, memory, confirmation gate, dan runtime sub-agent.
+Rexa adalah Personal Autonomous AI Assistant: modular, adaptive, cross-platform, multi-provider, dengan tool layer, memory, confirmation gate, dan runtime sub-agent.
 
-MVP ini sudah runnable secara lokal. Rexa main agent dapat memakai `codex-cli` model `gpt-5.5`, lalu mendesain worker/sub-agent dinamis per task. Tidak ada preset worker default: nama, role, model, pekerjaan, tools, dan system prompt worker dibuat oleh main agent saat runtime.
+Main agent default berjalan di GPT-4.1 / Claude Sonnet 4 / Gemini 2.5 (configurable), dan mendesain worker/sub-agent dinamis per task. Tidak ada preset worker default — nama, role, model, pekerjaan, tools, dan system prompt worker dibuat oleh main agent saat runtime.
+
+v0.2 highlights:
+- High-quality interactive setup wizard (profile presets, system scan, post-setup launcher).
+- Browser system upgrade: native Chromium adapter dengan stealth patches, multi-page, PDF export, cookies, evaluate, waitForSelector.
+- LLM router: SSE streaming, retry + exponential backoff, circuit breaker per-provider, cost/token accounting.
+- Planner detect 12 jenis intent (coding, browser, research, writing, analysis, math, creative, vision, data, terminal, file, scheduling).
+- termux-chromium adapter dihapus, default browser mode `auto` memilih binary yang ada.
 
 ## Arsitektur
 
@@ -57,84 +64,56 @@ src/
   database/             schema and migrations
   frontend/dashboard/   optional dashboard workspace
 config/                 active app/model/agent/storage config
-tests/                  Vitest coverage for core runtime
 docs/guides/            setup and architecture guides
-```
-
-## Package
-
-```json
-{
-  "scripts": {
-    "setup": "tsx src/index.ts setup",
-    "chat": "tsx src/index.ts chat",
-    "doctor": "tsx src/index.ts doctor",
-    "demo": "tsx src/index.ts demo-flow",
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
-  }
-}
 ```
 
 ## Quick Start
 
 ```bash
 npm install
-npm run setup
-npm run doctor
-npm run demo
-npm run chat
+npx playwright install chromium    # optional, for full browser power
+npm run setup                      # interactive wizard (profile presets + secrets)
+npm run doctor                     # verify environment + providers + API keys
+npm run chat                       # chat in this terminal
 ```
 
-## Global Termux Command
-
-This machine uses a durable wrapper at:
+All commands:
 
 ```bash
-/data/data/com.termux/files/home/bin/rexa
+npm run dev help    # full help screen
+npm run setup       # interactive setup wizard
+npm run doctor      # environment + provider diagnostics
+npm run chat        # CLI chat
+npm run telegram    # Telegram bot
+npm run whatsapp    # WhatsApp Cloud API webhook
+npm run ws          # WebSocket chat
+npm run web         # localhost web chat
+npm run api         # REST API
+npm run demo        # main-agent + sub-agent demo flow
+npm run typecheck   # TypeScript typecheck
+npm run build       # compile dist/
 ```
 
-The wrapper always enters `/data/data/com.termux/files/home/Rexa` first, then runs `dist/src/index.js` or falls back to `tsx src/index.ts`.
+`rexa setup` is keyboard-first: ↑/↓ pindah baris, ←/→ ubah nilai, Enter simpan, q batal. Wizard menampilkan profile presets (developer, researcher, power-user, minimal, custom), system scan, dan post-setup launcher (lanjut langsung ke chat).
 
-Use it from any folder:
+## API Keys & CLI Providers
+
+Rexa supports multiple LLM providers; configure whichever you want to use.
+
+API keys (set in `.env`):
 
 ```bash
-rexa doctor
-rexa chat
-rexa telegram
-rexa whatsapp
-rexa ws
-rexa web
-rexa demo-flow
+OPENAI_API_KEY=sk-...           # gpt-4.1, gpt-4.1-mini, gpt-4o
+ANTHROPIC_API_KEY=sk-ant-...    # claude-sonnet-4, claude-opus-4
+OPENROUTER_API_KEY=...          # any OpenRouter model
+GEMINI_API_KEY=...              # gemini-2.5-pro/flash
 ```
 
-Chat provider setup details are in [docs/guides/chat-providers.md](docs/guides/chat-providers.md).
-
-`rexa setup` is keyboard-first: use Up/Down to move rows, Left/Right to change values, Enter to save.
-If Telegram is selected, setup immediately asks for the BotFather token and saves it to local `.env`.
-
-Build and tests:
+Optional CLI providers (auto-detected by `npm run doctor`):
 
 ```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-## CLI Provider Requirements
-
-Codex CLI:
-
-```bash
-npm install -g @openai/codex
-codex
-```
-
-Claude Code:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-claude
+npm install -g @openai/codex && codex
+npm install -g @anthropic-ai/claude-code && claude
 ```
 
 Rexa only detects CLI availability and auth signals. It does not ask for passwords, bypass OAuth, or store raw CLI credentials.
@@ -168,8 +147,8 @@ claude
   "mainAgent": {
     "name": "Rexa",
     "role": "main-orchestrator",
-    "provider": "codex-cli",
-    "model": "gpt-5.5"
+    "provider": "openai",
+    "model": "gpt-4.1"
   },
   "subAgentPolicy": {
     "enabled": true,
@@ -189,7 +168,7 @@ When a task is complex, Rexa asks the main model to return JSON like:
     {
       "name": "SiteMapper",
       "role": "website-data-worker",
-      "model": "gpt-5.4",
+      "model": "gpt-4.1-mini",
       "tools": ["browser", "file"],
       "systemPrompt": "You collect website data and return structured findings.",
       "task": "Open the target website, extract relevant data, and report findings to Rexa."
@@ -206,9 +185,9 @@ Rexa ignores any provider in the proposal and forces the worker provider to matc
 {
   "roles": {
     "coding": {
-      "provider": "codex-cli",
-      "model": "gpt-5.4",
-      "fallbackProviders": ["mock", "openai", "ollama"]
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "fallbackProviders": ["openai", "openrouter", "mock"]
     },
     "fallback": {
       "provider": "mock",
@@ -232,30 +211,17 @@ const text = await browser.getVisibleText();
 
 Public actions such as publish, upload, submit, or email send must pass confirmation first.
 
-## Termux
+## Browser System
 
-```bash
-pkg update
-pkg install nodejs
-npm install
-npm run setup
-npm run doctor
-npm run chat
-```
+Default `browserMode` is `auto`, which uses the new `ChromiumAdapter` powered by Playwright + a local Chromium/Chrome binary (auto-detected) and falls back to the Playwright-managed binary when the system one is missing.
 
-Optional Codex/Claude providers:
+Features available on every browser action:
+- Stealth patches (`navigator.webdriver`, plugin/language spoofing, hardware hints).
+- Configurable user-agent, viewport, locale, timezone, device scale factor, proxy.
+- Multi-page contexts, cookies API, network options, downloads, PDF export, `evaluate()` for arbitrary scripts, `waitForSelector` / `waitForText` helpers.
+- Optional persistent profile via `userDataDir`, `REXA_CHROMIUM_PATH` env override.
 
-```bash
-npm install -g @openai/codex
-codex
-npm install -g @anthropic-ai/claude-code
-claude
-```
-
-Browser mode on Termux:
-- Use Playwright if available.
-- Use local Chromium/proot if available.
-- Fallback to Android intent/coordinate mode or remote browser.
+Supported `browserMode` values: `auto`, `chromium`, `playwright`, `remote-browser`, `limited`.
 
 ## Linux
 
