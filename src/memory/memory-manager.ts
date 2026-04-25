@@ -62,9 +62,21 @@ export class MemoryManager {
       .map((item) => item.record);
   }
 
-  async summarize(query: string): Promise<string> {
-    const memories = await this.retrieve(query, { limit: 5 });
+  async summarize(query: string, options: RetrieveOptions = {}): Promise<string> {
+    const memories = await this.retrieve(query, { limit: options.limit ?? 5, scope: options.scope });
     return memories.map((memory) => `- [${memory.type}] ${memory.text}`).join("\n");
+  }
+
+  /**
+   * Recent chronological turns within a scope. Useful for chat history
+   * retrieval where ordering matters more than semantic similarity.
+   */
+  async recentTurns(scope: string, limit = 10): Promise<MemoryRecord[]> {
+    const records = await this.storage.query<MemoryRecord>("memory", { where: { scope } });
+    return records
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit)
+      .reverse();
   }
 
   private score(record: MemoryRecord, query: string): number {

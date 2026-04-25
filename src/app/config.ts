@@ -15,9 +15,77 @@ export interface AppConfig {
   maxLLMCostPerTask: number;
   maxMemoryChunks: number;
   enabledChatProviders: string[];
-  browserMode: "playwright" | "termux-chromium" | "remote-browser" | "limited";
+  browserMode: "chromium" | "playwright" | "remote-browser" | "auto" | "limited";
   chatProviders: ChatProvidersConfig;
   browserAgent: BrowserAgentConfig;
+  tokenSaver: TokenSaverConfig;
+  daemon: DaemonConfig;
+  multitasking: MultitaskingConfig;
+  captcha: CaptchaConfig;
+  embeddings: EmbeddingsConfig;
+  telemetry: TelemetryConfig;
+}
+
+export interface TokenSaverConfig {
+  /** Enable global token-saver mode (smaller models, shorter context, fewer steps). */
+  enabled: boolean;
+  /** Force every role to map to the cheap role bundle when enabled. */
+  preferCheapRole: boolean;
+  /** Max planner steps when token-saver is on. */
+  maxPlannerSteps: number;
+  /** Max history turns kept in context when token-saver is on. */
+  maxHistoryTurns: number;
+  /** Disable streaming responses (avoids extra metadata). */
+  disableStreaming: boolean;
+  /** Skip optional tool-calling unless the planner explicitly demands it. */
+  disableOptionalTools: boolean;
+}
+
+export interface DaemonConfig {
+  enabled: boolean;
+  /** Where the daemon writes its socket / pid file. */
+  runtimeDir: string;
+  /** SQLite-backed task queue. */
+  queuePath: string;
+  /** Heartbeat interval. */
+  heartbeatMs: number;
+}
+
+export interface MultitaskingConfig {
+  /** Default concurrency cap for task scheduler. */
+  concurrency: number;
+  /** Sub-agent pool size used by daemon for parallel work. */
+  subAgentPoolSize: number;
+  /** Per-task default timeout. */
+  defaultTimeoutMs: number;
+}
+
+export interface CaptchaConfig {
+  enabled: boolean;
+  /** Provider order: 2captcha, anticaptcha, vision-llm. */
+  providers: Array<"2captcha" | "anticaptcha" | "capsolver" | "vision-llm">;
+  apiKeyEnv: { twoCaptcha: string; antiCaptcha: string; capSolver: string };
+  /** Polling interval for solver result. */
+  pollIntervalMs: number;
+  /** Max wait for solver. */
+  maxWaitMs: number;
+}
+
+export interface EmbeddingsConfig {
+  enabled: boolean;
+  provider: "openai" | "voyage" | "ollama" | "mock";
+  model: string;
+  /** Dimensions of the model output (used by storage). */
+  dimensions: number;
+  apiKeyEnv: string;
+}
+
+export interface TelemetryConfig {
+  enabled: boolean;
+  /** JSONL log path relative to Rexa home. */
+  logPath: string;
+  /** Persist cost rollups to storage. */
+  persistCost: boolean;
 }
 
 export interface ChatProvidersConfig {
@@ -25,11 +93,10 @@ export interface ChatProvidersConfig {
   telegram: { enabled: boolean; tokenEnv: string };
   whatsapp: {
     enabled: boolean;
-    mode: "cloud-api" | "webhook-only";
-    accessTokenEnv: string;
-    phoneNumberIdEnv: string;
-    verifyTokenEnv: string;
-    port: number;
+    /** Local directory for the multi-file auth state (Baileys). */
+    authDir: string;
+    /** Browser identifier shown in WhatsApp Linked Devices. */
+    browserName: string;
   };
   rest: { enabled: boolean; port: number };
   websocket: { enabled: boolean; port: number };
@@ -108,7 +175,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function defaultAppConfig(): AppConfig {
   return {
     name: "Rexa",
-    version: "0.1.0",
+    version: "0.2.0",
     permissionMode: "balanced",
     maxToolCallsPerTask: 30,
     maxSubAgents: 3,
@@ -117,17 +184,14 @@ export function defaultAppConfig(): AppConfig {
     maxLLMCostPerTask: 1,
     maxMemoryChunks: 8,
     enabledChatProviders: ["cli"],
-    browserMode: "limited",
+    browserMode: "auto",
     chatProviders: {
       cli: { enabled: true },
       telegram: { enabled: false, tokenEnv: "TELEGRAM_BOT_TOKEN" },
       whatsapp: {
         enabled: false,
-        mode: "cloud-api",
-        accessTokenEnv: "WHATSAPP_ACCESS_TOKEN",
-        phoneNumberIdEnv: "WHATSAPP_PHONE_NUMBER_ID",
-        verifyTokenEnv: "WHATSAPP_VERIFY_TOKEN",
-        port: 8792,
+        authDir: "data/whatsapp/auth",
+        browserName: "Rexa",
       },
       rest: { enabled: true, port: 8786 },
       websocket: { enabled: false, port: 8788 },
@@ -140,19 +204,70 @@ export function defaultAppConfig(): AppConfig {
       screenshotDir: "data/browser-screenshots",
       updateAfterActions: ["open", "click", "moveMouse", "type", "scroll", "uploadFile"],
     },
+    tokenSaver: {
+      enabled: parseEnvBool(process.env.REXA_TOKEN_SAVER, false),
+      preferCheapRole: true,
+      maxPlannerSteps: 3,
+      maxHistoryTurns: 6,
+      disableStreaming: true,
+      disableOptionalTools: true,
+    },
+    daemon: {
+      enabled: false,
+      runtimeDir: "data/daemon",
+      queuePath: "data/daemon/tasks.sqlite",
+      heartbeatMs: 5_000,
+    },
+    multitasking: {
+      concurrency: 4,
+      subAgentPoolSize: 4,
+      defaultTimeoutMs: 600_000,
+    },
+    captcha: {
+      enabled: true,
+      providers: ["2captcha", "anticaptcha", "capsolver", "vision-llm"],
+      apiKeyEnv: {
+        twoCaptcha: "TWOCAPTCHA_API_KEY",
+        antiCaptcha: "ANTICAPTCHA_API_KEY",
+        capSolver: "CAPSOLVER_API_KEY",
+      },
+      pollIntervalMs: 5_000,
+      maxWaitMs: 180_000,
+    },
+    embeddings: {
+      enabled: true,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
+      apiKeyEnv: "OPENAI_API_KEY",
+    },
+    telemetry: {
+      enabled: parseEnvBool(process.env.REXA_TELEMETRY, true),
+      logPath: "logs/telemetry.jsonl",
+      persistCost: true,
+    },
   };
+}
+
+function parseEnvBool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  const v = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(v)) return true;
+  if (["0", "false", "no", "off"].includes(v)) return false;
+  return fallback;
 }
 
 export function defaultModelsConfig(): ModelsRouterConfig {
   return {
     roles: {
-      main: { provider: "mock", model: "local-mock-main" },
-      coding: { provider: "mock", model: "local-mock-coding" },
-      browser: { provider: "mock", model: "local-mock-browser" },
-      cheap: { provider: "mock", model: "local-mock-cheap" },
+      main: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "ollama", "mock"] },
+      coding: { provider: "anthropic", model: "claude-sonnet-4-20250514", fallbackProviders: ["openai", "openrouter", "mock"] },
+      browser: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "mock"] },
+      research: { provider: "openai", model: "gpt-4.1", fallbackProviders: ["anthropic", "openrouter", "mock"] },
+      cheap: { provider: "openai", model: "gpt-4.1-mini", fallbackProviders: ["openrouter", "ollama", "mock"] },
       fallback: { provider: "mock", model: "local-mock-fallback" },
     },
-    fallbackOrder: ["mock"],
+    fallbackOrder: ["openai", "anthropic", "openrouter", "ollama", "mock"],
   };
 }
 
@@ -161,8 +276,8 @@ export function defaultAgentsConfig(): AgentsConfig {
     mainAgent: {
       name: "Rexa",
       role: "main-orchestrator",
-      provider: "mock",
-      model: "local-mock-main",
+      provider: "openai",
+      model: "gpt-4.1",
       tools: ["browser", "terminal", "file", "memory", "subagent"],
       memoryScope: "global",
       budget: { maxToolCalls: 30, maxExecutionTimeMs: 600_000, maxCostUsd: 1 },

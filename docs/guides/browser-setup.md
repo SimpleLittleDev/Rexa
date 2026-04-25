@@ -1,54 +1,76 @@
 # Browser Setup
 
-Browser priority:
+Rexa picks a browser adapter based on `browserMode` in `config/app.config.json`.
 
-1. Playwright Chromium.
-2. Termux local Chromium/proot adapter.
-3. Remote browser endpoint.
-4. Limited mode.
+| mode | description |
+| --- | --- |
+| `auto` (default) | Detect chromium binary or fall back to Playwright managed install. |
+| `chromium` | Use a local Chromium / Chrome / Edge binary via Playwright (full power). |
+| `playwright` | Use Playwright's bundled chromium. |
+| `remote-browser` | Talk to a remote browser HTTP endpoint via `REXA_REMOTE_BROWSER_URL`. |
+| `limited` | No automation; agent reports a friendly error if a tool action is requested. |
 
-Linux/Windows:
+## Linux / Windows / macOS
 
 ```bash
-npx playwright install chromium
+npm install playwright
+npx playwright install chromium     # downloads a managed chromium
 ```
 
-Termux:
-- Try installed `chromium` first.
-- If full GUI is unavailable, use remote browser mode:
+If you prefer using your system Chrome/Chromium:
+
+```bash
+export REXA_CHROMIUM_PATH=/usr/bin/google-chrome   # Linux
+export REXA_CHROMIUM_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"  # macOS
+```
+
+Rexa auto-detects common locations (`/usr/bin/chromium`, `google-chrome`, `Edge`) without setting any env var.
+
+## Remote browser mode
+
+For headless runners or constrained environments, expose a remote browser API and set:
 
 ```bash
 export REXA_REMOTE_BROWSER_URL=http://127.0.0.1:3000/browser
 ```
 
-Supported browser actions:
-- open URL
-- screenshot
-- read DOM
-- read visible text
-- move pointer
-- click coordinates
-- click selector/text
-- type/fill
-- upload file
-- scroll
-- wait navigation
+## Browser actions
 
-Rexa must ask confirmation before public submit/publish/upload actions.
+Available on `BrowserTool`:
 
-## Agent-Style Browser Updates
+- `open(url)` / `screenshot(path?)` / `getDom()` / `getVisibleText()`
+- `moveMouse`, `click`, `clickBySelector`, `clickByText`
+- `type`, `uploadFile`, `scroll`
+- `waitForSelector`, `waitForText`, `evaluate`
+- `pdf(path)`, `cookies()`, `setCookies(...)`
+- `setViewport(w, h)`, `setUserAgent(ua)`
+- `close()`
 
-When `browserAgent.screenshotUpdates` is enabled in `config/app.config.json`, browser tool actions emit updates:
+Public submit / publish / upload actions still pass the confirmation gate.
 
-```text
-Browser: Membuka browser: https://example.com
-Browser: Mouse dipindahkan ke 120, 240.
-Browser: Klik mouse di 120, 240.
+## Stealth & customization
+
+`ChromiumAdapter` ships with default stealth tweaks (drops `navigator.webdriver`, fakes plugin/language hints, sets reasonable hardwareConcurrency).
+You can pass options when constructing the adapter directly:
+
+```ts
+import { ChromiumAdapter } from "../tools/browser/chromium.adapter";
+
+const browser = new ChromiumAdapter({
+  headless: false,
+  userDataDir: "data/browser-profile",
+  userAgent: "Mozilla/5.0 (...)",
+  viewport: { width: 1440, height: 900 },
+  locale: "id-ID",
+  timezoneId: "Asia/Jakarta",
+  proxy: { server: "http://proxy:3128" },
+  stealth: true,
+});
 ```
 
-If the active chat provider supports images, Rexa sends the screenshot too. Otherwise it sends the screenshot file path.
+## Agent-style updates
 
-Config:
+Set `browserAgent.screenshotUpdates: true` (default) and Rexa will emit progress + screenshots after each action to whichever chat surface is active.
 
 ```json
 {

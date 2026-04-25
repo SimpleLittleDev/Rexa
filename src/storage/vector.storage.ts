@@ -1,4 +1,11 @@
 import { JsonStorage } from "./json.storage";
+import {
+  cosineSimilarity,
+  createEmbeddingsClient,
+  hashEmbedding,
+  type EmbeddingsClient,
+} from "../llm/embeddings";
+import type { EmbeddingsConfig } from "../app/config";
 
 export interface VectorRecord {
   id: string;
@@ -7,53 +14,69 @@ export interface VectorRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface VectorStorageOptions {
+  embeddings?: EmbeddingsClient | EmbeddingsConfig;
+}
+
+/**
+ * JSON-backed vector store with optional real embeddings.
+ *
+ * Records carry their embedding alongside the source text so queries can be
+ * scored via cosine similarity without re-embedding the corpus.
+ */
 export class VectorStorage {
   private readonly storage: JsonStorage;
+  private readonly embedder: EmbeddingsClient;
 
-  constructor(path: string) {
+  constructor(path: string, options: VectorStorageOptions = {}) {
     this.storage = new JsonStorage(path);
+    if (options.embeddings && "embed" in options.embeddings) {
+      this.embedder = options.embeddings;
+    } else if (options.embeddings) {
+      this.embedder = createEmbeddingsClient(options.embeddings);
+    } else {
+      this.embedder = {
+        dimensions: 64,
+        embed: async (texts) => texts.map((text) => hashEmbedding(text, 64)),
+      };
+    }
   }
 
   async connect(): Promise<void> {
     await this.storage.connect();
   }
 
-  async upsert(record: VectorRecord): Promise<void> {
-    await this.storage.set("vectors", record.id, record);
+  async upsert(record: Omit<VectorRecord, "vector"> & { vector?: number[] }): Promise<void> {
+    const vector = record.vector ?? (await this.embedder.embed([record.text]))[0];
+    await this.storage.set("vectors", record.id, { ...record, vector });
+  }
+
+  async upsertMany(records: Array<Omit<VectorRecord, "vector"> & { vector?: number[] }>): Promise<void> {
+    const missing = records.map((record, index) => ({ index, text: record.text })).filter(({ index }) => !records[index].vector);
+    if (missing.length > 0) {
+      const vectors = await this.embedder.embed(missing.map((m) => m.text));
+      missing.forEach(({ index }, i) => {
+        records[index] = { ...records[index], vector: vectors[i] };
+      });
+    }
+    await Promise.all(records.map((record) => this.storage.set("vectors", record.id, record as VectorRecord)));
   }
 
   async search(query: string, limit = 8): Promise<VectorRecord[]> {
-    const queryVector = embedText(query);
+    const [queryVector] = await this.embedder.embed([query]);
     const records = await this.storage.query<VectorRecord>("vectors");
     return records
-      .map((record) => ({ record, score: cosine(queryVector, record.vector) }))
+      .map((record) => ({ record, score: cosineSimilarity(queryVector, record.vector) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((item) => item.record);
   }
 }
 
+/**
+ * Legacy hash-based embed kept for backwards compatibility with code that
+ * imported the old function. Prefer `createEmbeddingsClient(...)` for new code.
+ */
 export function embedText(text: string): number[] {
-  const vector = new Array(64).fill(0);
-  for (const token of text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)) {
-    let hash = 0;
-    for (const char of token) hash = (hash * 31 + char.charCodeAt(0)) % vector.length;
-    vector[hash] += 1;
-  }
-  return vector;
-}
-
-function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  let magA = 0;
-  let magB = 0;
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const av = a[index] ?? 0;
-    const bv = b[index] ?? 0;
-    dot += av * bv;
-    magA += av * av;
-    magB += bv * bv;
-  }
-  if (magA === 0 || magB === 0) return 0;
-  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  return hashEmbedding(text, 64);
 }

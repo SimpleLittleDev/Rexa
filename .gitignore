@@ -1,9 +1,11 @@
 node_modules/
 dist/
 data/
-logs/
+/logs/
 .env
 *.sqlite
 *.sqlite3
 coverage/
 .DS_Store
+.test-*.ts
+

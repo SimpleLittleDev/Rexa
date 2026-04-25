@@ -1,31 +1,51 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { createRequire } from "node:module";
+import { resolveRexaHome } from "../app/paths";
+import { logger } from "../logs/logger";
 import type { ChatProvider, MessageHandler } from "./chat-provider.interface";
 
+/**
+ * QR-based WhatsApp provider using Baileys (`@whiskeysockets/baileys`).
+ *
+ * No Cloud API token, no phone number ID, no webhook required.
+ * On first run a QR shows in the terminal — scan with the WhatsApp mobile app
+ * (Linked Devices). Auth state persists in `<REXA_HOME>/data/whatsapp/auth/`
+ * so subsequent runs reconnect automatically.
+ *
+ * Baileys is loaded lazily so it stays an optional peer dependency.
+ *
+ *     npm install @whiskeysockets/baileys qrcode-terminal pino
+ */
+
+const requireOptional = createRequire(__filename);
+
 export interface WhatsAppProviderOptions {
-  accessToken?: string;
-  phoneNumberId?: string;
-  verifyToken?: string;
-  port?: number;
-  mode?: "cloud-api" | "webhook-only";
+  /** Override the auth state directory (default: <home>/data/whatsapp/auth). */
+  authDir?: string;
+  /** Print the QR to stdout when one is requested (default: true). */
+  printQR?: boolean;
+  /** Browser identifier reported to WhatsApp Web. */
+  browserName?: string;
 }
 
 export class WhatsAppChatProvider implements ChatProvider {
   readonly name = "whatsapp";
   private handler: MessageHandler | null = null;
-  private server: ReturnType<typeof createServer> | null = null;
-  private readonly accessToken: string;
-  private readonly phoneNumberId: string;
-  private readonly verifyToken: string;
-  private readonly port: number;
-  private readonly mode: "cloud-api" | "webhook-only";
+  private socket: any | null = null;
+  private state: any | null = null;
+  private saveCreds: (() => Promise<void>) | null = null;
+  private readonly authDir: string;
+  private readonly printQR: boolean;
+  private readonly browserName: string;
+  private connected = false;
 
   constructor(options: WhatsAppProviderOptions = {}) {
-    this.accessToken = options.accessToken ?? process.env.WHATSAPP_ACCESS_TOKEN ?? "";
-    this.phoneNumberId = options.phoneNumberId ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? "";
-    this.verifyToken = options.verifyToken ?? process.env.WHATSAPP_VERIFY_TOKEN ?? "";
-    this.port = options.port ?? Number(process.env.REXA_WHATSAPP_PORT ?? 8792);
-    this.mode = options.mode ?? "cloud-api";
+    const home = resolveRexaHome();
+    this.authDir = options.authDir ?? join(home, "data", "whatsapp", "auth");
+    this.printQR = options.printQR ?? true;
+    this.browserName = options.browserName ?? "Rexa";
   }
 
   onMessage(handler: MessageHandler): void {
@@ -33,111 +53,125 @@ export class WhatsAppChatProvider implements ChatProvider {
   }
 
   async start(): Promise<void> {
-    if (!this.verifyToken || (this.mode === "cloud-api" && (!this.accessToken || !this.phoneNumberId))) {
-      throw new Error("WhatsApp Cloud API is not configured. Set WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, and WHATSAPP_VERIFY_TOKEN.");
+    await mkdir(this.authDir, { recursive: true });
+
+    let baileys: any;
+    let qrcodeTerminal: any;
+    try {
+      baileys = requireOptional("@whiskeysockets/baileys");
+      qrcodeTerminal = requireOptional("qrcode-terminal");
+    } catch {
+      throw new Error(
+        "WhatsApp QR provider requires `@whiskeysockets/baileys` and `qrcode-terminal`.\n" +
+          "Install them: npm install @whiskeysockets/baileys qrcode-terminal",
+      );
     }
-    this.server = createServer((req, res) => this.handle(req, res));
-    await new Promise<void>((resolve) => this.server!.listen(this.port, "127.0.0.1", resolve));
+
+    const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = baileys;
+    const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    this.state = state;
+    this.saveCreds = saveCreds;
+    const { version } = await fetchLatestBaileysVersion();
+
+    this.socket = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false, // we render manually below
+      browser: [this.browserName, "Chrome", "0.2.0"],
+      syncFullHistory: false,
+    });
+
+    this.socket.ev.on("creds.update", () => saveCreds());
+
+    this.socket.ev.on("connection.update", (update: any) => {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr && this.printQR) {
+        process.stdout.write("\n");
+        process.stdout.write("Scan QR ini dari WhatsApp → Linked Devices:\n\n");
+        qrcodeTerminal.generate(qr, { small: true });
+        process.stdout.write("\n");
+      }
+      if (connection === "open") {
+        this.connected = true;
+        logger.info("[whatsapp] connected", { user: this.socket.user?.id });
+      } else if (connection === "close") {
+        this.connected = false;
+        const code = (lastDisconnect?.error as any)?.output?.statusCode;
+        const shouldReconnect = code !== DisconnectReason.loggedOut;
+        logger.warn("[whatsapp] disconnected", { code, shouldReconnect });
+        if (shouldReconnect) {
+          // Brief backoff then re-init.
+          setTimeout(() => this.start().catch((err) => logger.error("[whatsapp] reconnect failed", { err: String(err) })), 2_000);
+        }
+      }
+    });
+
+    this.socket.ev.on("messages.upsert", async (event: any) => {
+      if (event.type !== "notify") return;
+      for (const msg of event.messages ?? []) {
+        if (msg.key?.fromMe) continue;
+        const userId = msg.key?.remoteJid;
+        if (!userId) continue;
+        const text = extractText(msg.message);
+        if (!text) continue;
+        try {
+          await this.handler?.({ userId, text, metadata: { messageId: msg.key.id, pushName: msg.pushName } });
+        } catch (err) {
+          logger.error("[whatsapp] handler error", { err: String(err) });
+        }
+      }
+    });
   }
 
   async sendMessage(userId: string, message: string): Promise<void> {
-    if (this.mode === "webhook-only") return;
-    await this.sendCloudMessage(userId, { type: "text", text: { body: message.slice(0, 4000) } });
+    if (!this.socket) throw new Error("WhatsApp provider not started");
+    await this.waitForConnection(15_000);
+    await this.socket.sendMessage(userId, { text: message.slice(0, 4_000) });
   }
 
   async sendImage(userId: string, image: { path: string; caption?: string }): Promise<void> {
-    await this.sendMessage(userId, `${image.caption ?? "Browser screenshot"}\n${image.path}`);
+    if (!this.socket) throw new Error("WhatsApp provider not started");
+    await this.waitForConnection(15_000);
+    if (!existsSync(image.path)) throw new Error(`Image not found: ${image.path}`);
+    const buffer = await readFile(image.path);
+    await this.socket.sendMessage(userId, { image: buffer, caption: image.caption ?? "" });
   }
 
-  url(): string {
-    const address = this.server?.address() as AddressInfo | null;
-    return `http://127.0.0.1:${address?.port ?? this.port}/webhook`;
+  /** Status helper exposed for `rexa doctor` / `rexa whatsapp status`. */
+  status(): { paired: boolean; user: string | null; authDir: string } {
+    return {
+      paired: Boolean(this.state?.creds?.registered),
+      user: this.socket?.user?.id ?? null,
+      authDir: this.authDir,
+    };
   }
 
-  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method === "GET") {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
-      const mode = url.searchParams.get("hub.mode");
-      const token = url.searchParams.get("hub.verify_token");
-      const challenge = url.searchParams.get("hub.challenge");
-      if (mode === "subscribe" && token === this.verifyToken && challenge) {
-        res.writeHead(200, { "content-type": "text/plain" });
-        res.end(challenge);
-        return;
-      }
-      res.writeHead(403).end("verification failed");
-      return;
+  /** Wipe the local session — next start() will require a new QR scan. */
+  async logout(): Promise<void> {
+    try {
+      await this.socket?.logout?.();
+    } catch {
+      // Ignore — we're tearing down anyway.
     }
-
-    if (req.method === "POST") {
-      const body = JSON.parse(await readBody(req) || "{}") as WhatsAppWebhookPayload;
-      for (const message of extractMessages(body)) {
-        await this.handler?.({
-          userId: message.from,
-          text: message.text,
-          metadata: { provider: "whatsapp" },
-        });
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-
-    res.writeHead(404).end();
+    await rm(this.authDir, { recursive: true, force: true });
+    await mkdir(this.authDir, { recursive: true });
   }
 
-  private async sendCloudMessage(to: string, payload: Record<string, unknown>): Promise<void> {
-    const response = await fetch(`https://graph.facebook.com/v20.0/${this.phoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.accessToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to,
-        ...payload,
-      }),
-    });
-    if (!response.ok) throw new Error(`WhatsApp send failed: ${response.status} ${await response.text()}`);
+  private async waitForConnection(timeoutMs: number): Promise<void> {
+    if (this.connected) return;
+    const deadline = Date.now() + timeoutMs;
+    while (!this.connected && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!this.connected) throw new Error("WhatsApp socket not connected (scan QR first)");
   }
 }
 
-interface WhatsAppWebhookPayload {
-  entry?: Array<{
-    changes?: Array<{
-      value?: {
-        messages?: Array<{
-          from?: string;
-          text?: { body?: string };
-          type?: string;
-        }>;
-      };
-    }>;
-  }>;
-}
-
-function extractMessages(payload: WhatsAppWebhookPayload): Array<{ from: string; text: string }> {
-  const messages: Array<{ from: string; text: string }> = [];
-  for (const entry of payload.entry ?? []) {
-    for (const change of entry.changes ?? []) {
-      for (const message of change.value?.messages ?? []) {
-        if (message.from && message.text?.body) {
-          messages.push({ from: message.from, text: message.text.body });
-        }
-      }
-    }
-  }
-  return messages;
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk.toString();
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
+function extractText(message: any): string | null {
+  if (!message) return null;
+  if (message.conversation) return message.conversation;
+  if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
+  if (message.imageMessage?.caption) return message.imageMessage.caption;
+  if (message.videoMessage?.caption) return message.videoMessage.caption;
+  return null;
 }

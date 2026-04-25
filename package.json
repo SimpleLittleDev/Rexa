@@ -1,50 +1,64 @@
 {
   "name": "rexa",
-  "version": "0.1.0",
-  "description": "Rexa personal autonomous AI assistant foundation",
-  "private": true,
-  "main": "dist/index.js",
+  "version": "0.2.0",
+  "description": "Rexa — personal autonomous AI assistant",
+  "private": false,
+  "main": "dist/src/index.js",
   "bin": {
-    "rexa": "dist/src/index.js"
+    "rexa": "bin/rexa.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "config/",
+    "docs/",
+    "scripts/",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "setup": "tsx src/index.ts setup",
     "chat": "tsx src/index.ts chat",
     "doctor": "tsx src/index.ts doctor",
     "demo": "tsx src/index.ts demo-flow",
+    "telegram": "tsx src/index.ts telegram",
+    "whatsapp": "tsx src/index.ts whatsapp",
+    "ws": "tsx src/index.ts ws",
+    "web": "tsx src/index.ts web",
+    "api": "tsx src/index.ts api",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "prepare": "tsc -p tsconfig.json || echo 'skipping build (no devDependencies)'",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint 'src/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' --fix",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'",
+    "daemon": "tsx src/index.ts daemon",
+    "update": "tsx src/index.ts update",
+    "cost": "tsx src/index.ts cost"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3",
-    "vitest": "^2.1.4"
+    "typescript": "^5.6.3"
   },
   "peerDependenciesMeta": {
-    "better-sqlite3": {
-      "optional": true
-    },
-    "pg": {
-      "optional": true
-    },
-    "playwright": {
-      "optional": true
-    },
-    "puppeteer": {
-      "optional": true
-    },
-    "telegraf": {
-      "optional": true
-    },
-    "ws": {
-      "optional": true
-    }
+    "better-sqlite3": { "optional": true },
+    "pg": { "optional": true },
+    "playwright": { "optional": true },
+    "puppeteer": { "optional": true },
+    "telegraf": { "optional": true },
+    "ws": { "optional": true },
+    "@whiskeysockets/baileys": { "optional": true },
+    "qrcode-terminal": { "optional": true }
   },
   "dependencies": {
     "telegraf": "^4.16.3",

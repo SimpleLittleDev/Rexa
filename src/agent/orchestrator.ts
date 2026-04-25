@@ -36,7 +36,8 @@ export class Orchestrator {
     private readonly memory: MemoryManager,
     private readonly agentsConfig: AgentsConfig,
     private readonly appConfig: AppConfig = defaultAppConfig(),
-    private readonly browserToolFactory: BrowserToolFactory = (options) => createBrowserTool(appConfig, options),
+    private readonly browserToolFactory: BrowserToolFactory = (options) =>
+      createBrowserTool(appConfig, { ...options, router: options?.router ?? router }),
   ) {
     this.subagents = new SubAgentManager(router);
     this.subAgentDesigner = new DynamicSubAgentDesigner(router, agentsConfig);
@@ -54,20 +55,58 @@ export class Orchestrator {
     await progress("Memahami intent dan mengambil memory relevan.");
     const plan = this.planner.createPlan(message);
     state.setPlan(plan.steps);
-    const memoryContext = await this.memory.summarize(message);
+    const chatScope = `chat:${userId}`;
+    const recentTurnsLimit = this.appConfig.tokenSaver.enabled
+      ? this.appConfig.tokenSaver.maxHistoryTurns
+      : 10;
+    const [memoryContext, recentChatTurns] = await Promise.all([
+      this.memory.summarize(message),
+      this.memory.recentTurns(chatScope, recentTurnsLimit * 2),
+    ]);
+    const chatHistory = recentChatTurns
+      .map((turn) => {
+        const speaker = turn.type === "user-turn" ? "User" : "Rexa";
+        return `${speaker}: ${turn.text}`;
+      })
+      .join("\n");
+    // Persist this turn's user message immediately so future turns see it
+    // even if the assistant turn errors out below.
+    await this.memory.remember({
+      scope: chatScope,
+      type: "user-turn",
+      text: message,
+      importance: 0.4,
+      tags: ["chat", plan.intent.type],
+    });
 
     state.transition("running");
-    await progress(`Memilih role model: ${plan.recommendedRole}.`);
+    const role = this.appConfig.tokenSaver.enabled && this.appConfig.tokenSaver.preferCheapRole
+      ? "cheap"
+      : plan.recommendedRole;
+    if (this.appConfig.tokenSaver.enabled && plan.steps.length > this.appConfig.tokenSaver.maxPlannerSteps) {
+      plan.steps = plan.steps.slice(0, this.appConfig.tokenSaver.maxPlannerSteps);
+      state.setPlan(plan.steps);
+    }
+    await progress(`Memilih role model: ${role}${role !== plan.recommendedRole ? " (token-saver)" : ""}.`);
 
     if (plan.intent.type === "browser") {
       const responseText = await this.executeBrowserTask(message, options);
-      await this.memory.remember({
-        scope: "task",
-        type: "task-result",
-        text: `Task ${taskId}: ${message}\nResult: ${responseText}`,
-        importance: 0.5,
-        tags: [plan.intent.type, "browser-tool"],
-      });
+      await Promise.all([
+        this.memory.remember({
+          scope: "task",
+          type: "task-result",
+          text: `Task ${taskId}: ${message}\nResult: ${responseText}`,
+          importance: 0.5,
+          tags: [plan.intent.type, "browser-tool"],
+        }),
+        this.memory.remember({
+          scope: chatScope,
+          type: "assistant-turn",
+          text: responseText,
+          importance: 0.4,
+          tags: ["chat", "browser"],
+        }),
+      ]);
       state.setResult(responseText);
       state.transition(responseText.startsWith("Browser gagal") ? "failed" : "completed");
       await progress("Task browser selesai dan evidence dikirim bila tersedia.");
@@ -102,7 +141,7 @@ export class Orchestrator {
         subagentSummary += `\n\nSub-agent ${result.name} (${result.role}): ${result.summary}\nValidation: ${validation.valid ? "valid" : validation.risks.join(", ")}`;
         if (result.status !== "completed") {
           await progress(`Sub-agent ${result.name} gagal, mencoba fallback role ${plan.recommendedRole}.`);
-          const fallback = await this.router.generateForRole(plan.recommendedRole, {
+          const fallback = await this.router.generateForRole(role, {
             messages: [
               { role: "system", content: "You are Rexa fallback executor. Summarize the task and propose the next safe step." },
               { role: "user", content: `Original task: ${message}\nSub-agent failure: ${result.summary}` },
@@ -113,20 +152,38 @@ export class Orchestrator {
       }
     }
 
-    const response = await this.router.generateForRole(plan.recommendedRole, {
+    const systemPrompt = this.appConfig.tokenSaver.enabled ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
+    const userBlock = [
+      `User request: ${message}`,
+      `Detected intent: ${plan.intent.type} (multiStep=${plan.intent.multiStep}, risk=${plan.intent.risk})`,
+      `Planner steps:\n${plan.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`,
+      `Relevant long-term memory:\n${memoryContext || "(empty)"}`,
+      `Recent conversation (last ${recentChatTurns.length} turns):\n${chatHistory || "(no prior turns)"}`,
+    ];
+    if (subagentSummary) userBlock.push(`Sub-agent results:${subagentSummary}`);
+    const response = await this.router.generateForRole(role, {
       messages: [
-        { role: "system", content: "You are Rexa, a concise personal autonomous AI assistant. Do not reveal private chain-of-thought." },
-        { role: "user", content: `User request: ${message}\n\nMemory:\n${memoryContext}${subagentSummary}` },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userBlock.join("\n\n") },
       ],
     });
 
-    await this.memory.remember({
-      scope: "task",
-      type: "task-result",
-      text: `Task ${taskId}: ${message}\nResult: ${response.text}`,
-      importance: 0.5,
-      tags: [plan.intent.type, response.provider],
-    });
+    await Promise.all([
+      this.memory.remember({
+        scope: "task",
+        type: "task-result",
+        text: `Task ${taskId}: ${message}\nResult: ${response.text}`,
+        importance: 0.5,
+        tags: [plan.intent.type, response.provider],
+      }),
+      this.memory.remember({
+        scope: chatScope,
+        type: "assistant-turn",
+        text: response.text,
+        importance: 0.4,
+        tags: ["chat", plan.intent.type, response.provider],
+      }),
+    ]);
     state.setResult(response.text);
     state.transition("completed");
     await progress("Task selesai dan memory task diperbarui.");
@@ -151,6 +208,24 @@ export class Orchestrator {
     return (await workflow.run(message)).summary;
   }
 }
+
+const SYSTEM_PROMPT = [
+  "You are Rexa, a personal autonomous AI assistant.",
+  "You are versatile across coding, research, writing, analysis, math, planning, browser automation, terminal tasks, data wrangling and creative ideation.",
+  "Always respond in the same language as the user (Bahasa Indonesia or English).",
+  "Be concise but thorough; lead with the answer or action and then provide a brief justification.",
+  "Use the planner steps as a checklist – complete the relevant ones and skip those that don't apply.",
+  "When you are unsure or risk irreversible actions (sending, publishing, deleting, paying), ask for confirmation first.",
+  "Cite sources or quote evidence when you have them; if memory is empty, state assumptions clearly.",
+  "Never reveal private chain-of-thought; share only the final reasoning and conclusions the user needs.",
+].join(" ");
+
+const SYSTEM_PROMPT_LITE = [
+  "You are Rexa in token-saver mode.",
+  "Answer in 1-3 sentences. No filler, no chain-of-thought.",
+  "Match the user's language. Skip planner steps that don't apply.",
+  "Refuse irreversible actions unless explicitly confirmed.",
+].join(" ");
 
 function initialTaskState(taskId: string, userId: string): TaskState {
   return {
