@@ -21,6 +21,8 @@ import { PostgresStorage } from "../storage/postgres.storage";
 import { SQLiteStorage } from "../storage/sqlite.storage";
 import type { StorageAdapter } from "../storage/storage-adapter.interface";
 import { Telemetry } from "../logs/telemetry";
+import { MCPRegistry } from "../mcp/mcp-registry";
+import { SandboxManager } from "../security/sandbox";
 
 export interface RexaRuntime {
   config: RexaConfigBundle;
@@ -29,6 +31,8 @@ export interface RexaRuntime {
   memory: MemoryManager;
   storage: StorageAdapter;
   telemetry: Telemetry;
+  mcp: MCPRegistry;
+  sandbox: SandboxManager;
 }
 
 export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<RexaRuntime> {
@@ -59,6 +63,12 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
       });
     },
   });
+  const sandbox = new SandboxManager(config.app.sandbox);
+  const mcp = new MCPRegistry();
+  if (config.app.mcp.enabled && config.app.mcp.servers.length > 0) {
+    // Connect MCP servers in the background — failures shouldn't block boot.
+    void mcp.connectAll(config.app.mcp.servers);
+  }
   const orchestrator = new Orchestrator(router, memory, config.agents, config.app);
   return {
     config,
@@ -67,6 +77,8 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
     memory,
     storage,
     telemetry,
+    mcp,
+    sandbox,
   };
 }
 

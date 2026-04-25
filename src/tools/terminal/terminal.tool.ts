@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import { fail, ok, type ToolResult } from "../../common/result";
 import { RiskEngine } from "../../agent/risk-engine";
+import type { SandboxManager, SandboxPolicy } from "../../security/sandbox";
 
 export interface TerminalRunOptions {
   cwd?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   confirmed?: boolean;
+  /** Force/disable sandboxing for one command. */
+  sandbox?: boolean | SandboxPolicy;
 }
 
 export interface TerminalRunData {
@@ -20,9 +23,11 @@ export interface TerminalRunData {
 
 export class TerminalTool {
   private readonly riskEngine: RiskEngine;
+  private readonly sandbox?: SandboxManager;
 
-  constructor(options: { riskEngine?: RiskEngine } = {}) {
+  constructor(options: { riskEngine?: RiskEngine; sandbox?: SandboxManager } = {}) {
     this.riskEngine = options.riskEngine ?? new RiskEngine();
+    this.sandbox = options.sandbox;
   }
 
   async run(command: string, options: TerminalRunOptions = {}): Promise<ToolResult<TerminalRunData>> {
@@ -37,6 +42,43 @@ export class TerminalTool {
 
     const startedAt = Date.now();
     const cwd = options.cwd ?? process.cwd();
+
+    if (this.sandbox && options.sandbox !== false) {
+      const policy: SandboxPolicy = {
+        ...(typeof options.sandbox === "object" ? options.sandbox : {}),
+        cwd,
+        env: options.env as Record<string, string> | undefined,
+        timeoutMs: options.timeoutMs,
+      };
+      try {
+        const result = await this.sandbox.run("sh", ["-lc", command], policy);
+        const data: TerminalRunData = {
+          command,
+          cwd,
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          durationMs: result.durationMs,
+        };
+        if (result.timedOut) {
+          return fail("COMMAND_TIMEOUT", `Command exceeded ${options.timeoutMs ?? 30_000}ms (sandbox=${result.backend})`, {
+            recoverable: true,
+            metadata: { ...data, risk, sandbox: result.backend },
+          });
+        }
+        if (result.exitCode === 0) {
+          return ok(data, { risk, sandbox: result.backend });
+        }
+        return fail("COMMAND_FAILED", `Command failed with exit code ${result.exitCode}`, {
+          recoverable: true,
+          metadata: { ...data, risk, sandbox: result.backend },
+        });
+      } catch (error) {
+        return fail("COMMAND_FAILED", error instanceof Error ? error.message : String(error), {
+          recoverable: true,
+        });
+      }
+    }
 
     return new Promise((resolve) => {
       const child = spawn(command, {

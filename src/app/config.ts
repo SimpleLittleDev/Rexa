@@ -24,6 +24,60 @@ export interface AppConfig {
   captcha: CaptchaConfig;
   embeddings: EmbeddingsConfig;
   telemetry: TelemetryConfig;
+  mcp: MCPConfig;
+  sandbox: SandboxConfig;
+  codeIntel: CodeIntelConfig;
+}
+
+export interface MCPConfig {
+  enabled: boolean;
+  /** Server connection list. Stdio-based today; HTTP/SSE later. */
+  servers: MCPServerEntry[];
+}
+
+export interface MCPServerEntry {
+  name: string;
+  enabled?: boolean;
+  transport?: "stdio";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  toolAllowlist?: string[];
+  requestTimeoutMs?: number;
+}
+
+export interface SandboxConfig {
+  enabled: boolean;
+  /** "auto" picks bubblewrap on Linux, sandbox-exec on macOS, job-object on Windows. */
+  backend: "auto" | "bubblewrap" | "sandbox-exec" | "firejail" | "job-object" | "none";
+  /** Default per-execution wall-clock timeout. */
+  defaultTimeoutMs: number;
+  /** Default memory cap in MB (best-effort, depends on backend). */
+  memoryLimitMb: number;
+  /** Default CPU cap (best-effort). */
+  cpuLimit: number;
+  /** Allow network access from inside the sandbox. */
+  allowNetwork: boolean;
+  /** Whitelisted writable paths (sandbox-relative). */
+  writablePaths: string[];
+}
+
+export interface CodeIntelConfig {
+  enabled: boolean;
+  /** Optional language servers to spawn on demand. */
+  languageServers: LanguageServerEntry[];
+  /** Tree-sitter WASM module directory. */
+  treeSitterWasmDir: string;
+}
+
+export interface LanguageServerEntry {
+  name: string;
+  /** Languages this server is invoked for (LSP languageId). */
+  languages: string[];
+  command: string;
+  args?: string[];
+  rootMarker?: string[];
 }
 
 export interface TokenSaverConfig {
@@ -245,6 +299,24 @@ export function defaultAppConfig(): AppConfig {
       enabled: parseEnvBool(process.env.REXA_TELEMETRY, true),
       logPath: "logs/telemetry.jsonl",
       persistCost: true,
+    },
+    mcp: {
+      enabled: true,
+      servers: [],
+    },
+    sandbox: {
+      enabled: parseEnvBool(process.env.REXA_SANDBOX, true),
+      backend: "auto",
+      defaultTimeoutMs: 60_000,
+      memoryLimitMb: 1024,
+      cpuLimit: 1,
+      allowNetwork: false,
+      writablePaths: ["data/sandbox"],
+    },
+    codeIntel: {
+      enabled: true,
+      languageServers: [],
+      treeSitterWasmDir: "data/tree-sitter",
     },
   };
 }

@@ -36,7 +36,12 @@ function countTokens(text: string): number {
 }
 
 function extractUserRequest(content: string): string {
-  const userRequest = content.match(/User request:\s*([\s\S]*?)(?:\n\nMemory:|\n\nSub-agent|\n\nValidation:|$)/i)?.[1]?.trim();
-  if (userRequest) return userRequest;
-  return content.split(/\n\nMemory:/i)[0]?.trim() ?? content.trim();
+  // The orchestrator builds a structured user-block; we only echo the
+  // plain "User request" line so the mock response stays terse instead
+  // of regurgitating planner steps + memory dumps back to the surface.
+  const match = content.match(
+    /User request:\s*([\s\S]*?)(?:\n\nDetected intent:|\n\nPlanner steps:|\n\nMemory:|\n\nRelevant long-term memory:|\n\nRecent conversation|\n\nSub-agent|\n\nValidation:|$)/i,
+  );
+  if (match?.[1]) return match[1].trim().slice(0, 500);
+  return content.split(/\n\n/)[0]?.trim().slice(0, 500) ?? content.trim().slice(0, 500);
 }

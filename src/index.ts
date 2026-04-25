@@ -133,6 +133,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "mcp") {
+    await runMcpCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (command === "sandbox") {
+    await runSandboxCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (command === "code") {
+    await runCodeCommand(process.argv.slice(3));
+    return;
+  }
+
   if (command === "demo-flow" || command === "demo") {
     const runtime = await createRexaRuntime();
     const result = await runtime.agent.run(
@@ -250,6 +265,18 @@ function printHelp(): void {
         `${color.brightCyan("watch")}     ${color.dim("watch <url> --interval 30s --duration 5h --on-change <cmd>")}`,
         `${color.brightCyan("schedule")}  ${color.dim('schedule "<cron>" "<command>"  (5-field cron)')}`,
         `${color.brightCyan("task")}      ${color.dim("Subcommands: list | cancel <id> | rm <id> | log <id>")}`,
+      ].join("\n"),
+      2,
+    ),
+  );
+  console.log();
+  console.log(header("Code intelligence & safety"));
+  console.log(
+    indent(
+      [
+        `${color.brightCyan("code")}      ${color.dim("Subcommands: search | def | refs | validate-patch")}`,
+        `${color.brightCyan("mcp")}       ${color.dim("Subcommands: list | test <server>  (Model Context Protocol)")}`,
+        `${color.brightCyan("sandbox")}   ${color.dim("Subcommands: info | run <command>  (bubblewrap/sandbox-exec/job-object)")}`,
       ].join("\n"),
       2,
     ),
@@ -453,6 +480,152 @@ async function runUpdateCommand(home: string): Promise<void> {
     }
   }
   console.log(`${color.green("✔")} update complete`);
+}
+
+async function runMcpCommand(args: string[]): Promise<void> {
+  const sub = args[0] ?? "list";
+  const { loadConfig } = await import("./app/config");
+  const { MCPRegistry } = await import("./mcp/mcp-registry");
+  const home = resolveRexaHome();
+  const bundle = await loadConfig(home);
+  const servers = bundle.app.mcp.servers;
+  if (sub === "list") {
+    console.log(section("MCP servers (configured)"));
+    if (!servers.length) {
+      console.log(color.dim("  (no servers — add entries to config/app.config.json under `mcp.servers`)"));
+      return;
+    }
+    console.log(
+      table(
+        servers.map((s) => [
+          color.bold(s.name),
+          color.dim(`${s.transport ?? "stdio"} • ${s.command ?? "-"}`),
+          s.enabled === false ? color.yellow("disabled") : color.green("enabled"),
+        ]),
+      ),
+    );
+    return;
+  }
+  if (sub === "test") {
+    const name = args[1];
+    if (!name) {
+      console.error(color.red("usage: rexa mcp test <server-name>"));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = servers.find((s) => s.name === name);
+    if (!cfg) {
+      console.error(color.red(`server '${name}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    const registry = new MCPRegistry();
+    const handle = await registry.connect(cfg);
+    console.log(color.green(`✔ connected to ${name}`));
+    console.log(color.dim(`tools: ${handle.toolDefinitions.length}`));
+    for (const t of handle.toolDefinitions.slice(0, 20)) console.log("  - " + t.name);
+    await registry.closeAll();
+    return;
+  }
+  console.error(color.red(`Unknown mcp subcommand: ${sub}`));
+  process.exitCode = 1;
+}
+
+async function runSandboxCommand(args: string[]): Promise<void> {
+  const sub = args[0] ?? "info";
+  const { loadConfig } = await import("./app/config");
+  const { SandboxManager } = await import("./security/sandbox");
+  const bundle = await loadConfig(resolveRexaHome());
+  const manager = new SandboxManager(bundle.app.sandbox);
+  if (sub === "info") {
+    const available = await manager.availableBackends();
+    const active = await manager.resolveBackend();
+    console.log(section("Sandbox"));
+    console.log(
+      table([
+        [color.dim("enabled"), bundle.app.sandbox.enabled ? color.green("yes") : color.yellow("no")],
+        [color.dim("configured"), bundle.app.sandbox.backend],
+        [color.dim("active"), color.bold(active.name)],
+        [color.dim("available"), available.join(", ")],
+      ]),
+    );
+    return;
+  }
+  if (sub === "run") {
+    const cmd = args.slice(1).join(" ");
+    if (!cmd) {
+      console.error(color.red("usage: rexa sandbox run <command>"));
+      process.exitCode = 1;
+      return;
+    }
+    const result = await manager.run("sh", ["-lc", cmd]);
+    console.log(`backend=${result.backend} exit=${result.exitCode} timedOut=${result.timedOut}`);
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    return;
+  }
+  console.error(color.red(`Unknown sandbox subcommand: ${sub}`));
+  process.exitCode = 1;
+}
+
+async function runCodeCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const { CodeSearch } = await import("./code/code-search");
+  const { validatePatch } = await import("./code/patch");
+  const search = new CodeSearch(process.cwd());
+  if (sub === "search") {
+    const pattern = args[1];
+    if (!pattern) {
+      console.error(color.red("usage: rexa code search <pattern> [--glob '<glob>']"));
+      process.exitCode = 1;
+      return;
+    }
+    const glob = parseStringFlag(args, "--glob") ?? undefined;
+    const matches = await search.searchPattern(pattern, { glob, limit: 50 });
+    for (const m of matches) console.log(`${m.path}:${m.line}:${m.column}  ${m.text.trim().slice(0, 200)}`);
+    return;
+  }
+  if (sub === "def") {
+    const id = args[1];
+    if (!id) {
+      console.error(color.red("usage: rexa code def <identifier> [--lang typescript]"));
+      process.exitCode = 1;
+      return;
+    }
+    const lang = parseStringFlag(args, "--lang") ?? undefined;
+    const matches = await search.findDefinition(id, lang);
+    for (const m of matches) console.log(`${m.path}:${m.line}:${m.column}  ${m.text.trim().slice(0, 200)}`);
+    return;
+  }
+  if (sub === "refs") {
+    const id = args[1];
+    if (!id) {
+      console.error(color.red("usage: rexa code refs <identifier> [--lang typescript]"));
+      process.exitCode = 1;
+      return;
+    }
+    const lang = parseStringFlag(args, "--lang") ?? undefined;
+    const matches = await search.findReferences(id, lang);
+    for (const m of matches) console.log(`${m.path}:${m.line}:${m.column}  ${m.text.trim().slice(0, 200)}`);
+    return;
+  }
+  if (sub === "validate-patch") {
+    const file = args[1];
+    if (!file) {
+      console.error(color.red("usage: rexa code validate-patch <file.diff>"));
+      process.exitCode = 1;
+      return;
+    }
+    const { readFileSync } = await import("node:fs");
+    const diff = readFileSync(file, "utf8");
+    const result = await validatePatch(diff, process.cwd());
+    console.log(JSON.stringify(result, null, 2));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  console.error(color.red(`Unknown code subcommand: ${sub ?? "(none)"}`));
+  console.error(color.dim("subcommands: search | def | refs | validate-patch"));
+  process.exitCode = 1;
 }
 
 async function openQueue(home: string) {
