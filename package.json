@@ -2,11 +2,19 @@
   "name": "rexa",
   "version": "0.2.0",
   "description": "Rexa — personal autonomous AI assistant",
-  "private": true,
-  "main": "dist/index.js",
+  "private": false,
+  "main": "dist/src/index.js",
   "bin": {
-    "rexa": "dist/src/index.js"
+    "rexa": "bin/rexa.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "config/",
+    "agents.config.example.json",
+    "models.config.example.json",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "setup": "tsx src/index.ts setup",
@@ -19,6 +27,7 @@
     "web": "tsx src/index.ts web",
     "api": "tsx src/index.ts api",
     "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json || echo 'skipping build (no devDependencies)'",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

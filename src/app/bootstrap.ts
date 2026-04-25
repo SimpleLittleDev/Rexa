@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { loadConfig, type RexaConfigBundle, type StorageConfig } from "./config";
+import { resolveRexaHome } from "./paths";
 import { MainAgent } from "../agent/main-agent";
 import { Orchestrator } from "../agent/orchestrator";
 import { LLMRouter } from "../llm/llm-router";
@@ -28,7 +29,7 @@ export interface RexaRuntime {
   storage: StorageAdapter;
 }
 
-export async function createRexaRuntime(rootDir = process.cwd()): Promise<RexaRuntime> {
+export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<RexaRuntime> {
   const config = await loadConfig(rootDir);
   const storage = createStorage(config.storage, rootDir);
   await storage.connect();
@@ -59,7 +60,7 @@ export function createProviders(): Record<string, LLMProvider> {
   };
 }
 
-export function createStorage(config: StorageConfig, rootDir = process.cwd()): StorageAdapter {
+export function createStorage(config: StorageConfig, rootDir = resolveRexaHome()): StorageAdapter {
   if (config.defaultStorage === "memory") return new MemoryStorage();
   if (config.defaultStorage === "sqlite") return new SQLiteStorage(resolveProjectPath(rootDir, config.sqlite.path));
   if (config.defaultStorage === "postgres") {
@@ -70,7 +71,7 @@ export function createStorage(config: StorageConfig, rootDir = process.cwd()): S
   return new JsonStorage(resolveProjectPath(rootDir, config.json.path));
 }
 
-export async function ensureProjectDirs(rootDir = process.cwd()): Promise<void> {
+export async function ensureProjectDirs(rootDir = resolveRexaHome()): Promise<void> {
   for (const relative of ["data", "logs", "logs/subagents", "config"]) {
     await mkdir(join(rootDir, relative), { recursive: true });
   }

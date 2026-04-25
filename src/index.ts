@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { join } from "node:path";
 import { loadEnvFile } from "./app/env-file";
+import { resolveRexaHome } from "./app/paths";
 import { createRexaRuntime, ensureProjectDirs } from "./app/bootstrap";
 import { startServer } from "./app/server";
 import { attachAgentToChatProvider } from "./chat/chat-runner";
@@ -17,8 +18,13 @@ import { CLIProviderDetector } from "./llm/cli-provider-detector";
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? "help";
-  await ensureProjectDirs();
-  await loadEnvFile(join(process.cwd(), ".env"));
+  const home = resolveRexaHome();
+  await ensureProjectDirs(home);
+  // Load .env from both Rexa home and current working directory (cwd wins).
+  await loadEnvFile(join(home, ".env"));
+  if (process.cwd() !== home) {
+    await loadEnvFile(join(process.cwd(), ".env"));
+  }
 
   if (command === "setup") {
     await new SetupWizard().run();
@@ -115,6 +121,7 @@ async function runDoctor(): Promise<void> {
   console.log();
   console.log(
     table([
+      [color.dim("Rexa home"), resolveRexaHome()],
       [color.dim("OS"), `${env.os} ${env.architecture}`],
       [color.dim("Node.js"), env.nodeVersion],
       [color.dim("npm"), env.npmVersion ?? color.red("missing")],
@@ -157,7 +164,8 @@ function printHelp(): void {
     box(
       [
         color.bold("Usage"),
-        color.dim("  rexa <command>") + "  or  " + color.dim("npm run <script>"),
+        color.dim("  rexa <command>") + "    " + color.dim("(globally installed)"),
+        color.dim("  npm run <script>") + "  " + color.dim("(from a clone)"),
       ].join("\n"),
       { borderColor: color.brightBlue },
     ),

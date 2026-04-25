@@ -67,31 +67,79 @@ config/                 active app/model/agent/storage config
 docs/guides/            setup and architecture guides
 ```
 
-## Quick Start
+## Install
+
+### Global command (recommended)
+
+After install, the `rexa` command is on your PATH everywhere — no `npm run …` needed.
+
+**Linux / macOS / Termux** (one-liner):
 
 ```bash
-npm install
-npx playwright install chromium    # optional, for full browser power
-npm run setup                      # interactive wizard (profile presets + secrets)
-npm run doctor                     # verify environment + providers + API keys
-npm run chat                       # chat in this terminal
+curl -fsSL https://raw.githubusercontent.com/SimpleLittleDev/Rexa/main/scripts/install.sh | bash
 ```
 
-All commands:
+**Windows PowerShell** (one-liner):
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/SimpleLittleDev/Rexa/main/scripts/install.ps1 | iex
+```
+
+**From a clone (any platform)**:
 
 ```bash
-npm run dev help    # full help screen
-npm run setup       # interactive setup wizard
-npm run doctor      # environment + provider diagnostics
-npm run chat        # CLI chat
-npm run telegram    # Telegram bot
-npm run whatsapp    # WhatsApp Cloud API webhook
-npm run ws          # WebSocket chat
-npm run web         # localhost web chat
-npm run api         # REST API
-npm run demo        # main-agent + sub-agent demo flow
-npm run typecheck   # TypeScript typecheck
-npm run build       # compile dist/
+git clone https://github.com/SimpleLittleDev/Rexa.git ~/.rexa
+cd ~/.rexa
+npm install
+npm run build
+npm link        # registers `rexa` globally
+```
+
+**From npm (once published)**:
+
+```bash
+npm install -g rexa
+```
+
+The installer drops the source at `~/.rexa` (Linux/macOS/Termux) or `%USERPROFILE%\.rexa` (Windows). Override with `REXA_HOME=/custom/path` before running the installer.
+
+### Run from anywhere
+
+```bash
+rexa setup     # interactive wizard (profile presets, system scan, secrets)
+rexa doctor    # verify environment + providers + API keys
+rexa chat      # CLI chat
+rexa telegram  # Telegram bot
+rexa whatsapp  # WhatsApp Cloud API webhook
+rexa ws        # WebSocket chat
+rexa web       # localhost web chat
+rexa api       # localhost REST API
+rexa demo      # main-agent + sub-agent demo
+rexa help      # full help screen
+```
+
+When run outside the Rexa source folder, Rexa reads/writes config in `$REXA_HOME` (default `~/.rexa`). Override per-shell:
+
+```bash
+export REXA_HOME=/path/to/your/rexa-config
+```
+
+### Optional power-ups
+
+```bash
+npx playwright install chromium    # full browser automation (or set REXA_CHROMIUM_PATH)
+npm install -g @openai/codex       # codex-cli provider
+npm install -g @anthropic-ai/claude-code  # claude-code provider
+```
+
+### Dev mode (work on Rexa itself)
+
+```bash
+git clone https://github.com/SimpleLittleDev/Rexa.git
+cd Rexa
+npm install
+npm run dev help    # all commands available without global install
+npm run setup
 ```
 
 `rexa setup` is keyboard-first: ↑/↓ pindah baris, ←/→ ubah nilai, Enter simpan, q batal. Wizard menampilkan profile presets (developer, researcher, power-user, minimal, custom), system scan, dan post-setup launcher (lanjut langsung ke chat).

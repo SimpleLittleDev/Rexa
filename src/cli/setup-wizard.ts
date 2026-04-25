@@ -6,6 +6,7 @@ import { box, color, divider, indent, header, section, spinner, status, table } 
 import { confirm, pickOne, runKeyboardWizard, type SetupField } from "./keyboard-menu";
 import { promptSecret } from "./secret-prompt";
 import { loadEnvFile, writeEnvValue } from "../app/env-file";
+import { resolveRexaHome } from "../app/paths";
 import { EnvironmentDetector } from "../env/detector";
 import { detectChromiumExecutable } from "../tools/browser/chromium.adapter";
 import { CLIProviderDetector } from "../llm/cli-provider-detector";
@@ -83,7 +84,7 @@ const PROFILES: Record<Exclude<Profile, "custom">, ProfileBundle> = {
 };
 
 export class SetupWizard {
-  async run(rootDir = process.cwd()): Promise<void> {
+  async run(rootDir = resolveRexaHome()): Promise<void> {
     output.write("\x1b[2J\x1b[H");
     output.write(banner() + "\n\n");
     output.write(
@@ -91,6 +92,7 @@ export class SetupWizard {
         [
           color.bold("Welcome to Rexa setup."),
           "Wizard ini akan menyiapkan environment, provider, browser, storage, dan chat surface.",
+          color.dim(`Rexa home: ${rootDir}`),
           color.dim("Tekan Enter di tiap step untuk lanjut, q untuk batal."),
         ].join("\n"),
         { title: "Rexa", borderColor: color.brightMagenta },
