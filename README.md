@@ -62,7 +62,6 @@ src/
   cli/                  setup wizard and TUI helpers
   logs/                 logger and audit log
   database/             schema and migrations
-  frontend/dashboard/   optional dashboard workspace
 config/                 active app/model/agent/storage config
 docs/guides/            setup and architecture guides
 ```
@@ -294,30 +293,22 @@ npm run chat
 
 Rexa includes a PowerShell terminal adapter and path-safe file tool.
 
-## Docker
+## Background daemon, multitasking, token-saver
+
+Lihat <docs/guides/daemon-and-multitasking.md> dan <docs/guides/token-saver.md>.
 
 ```bash
-docker compose up --build
+rexa daemon start              # start background worker
+rexa watch https://api/health --interval 30s --duration 5h --on-change "send-telegram"
+rexa schedule "0 */1 * * *" "summarize logs and email me"
+rexa task list                 # current queue
+rexa cost                      # token + cost dashboard
+rexa update                    # pull + rebuild self
 ```
 
-Data persists in `./data`.
+Token-saver mode (smaller cheap model, shorter context, fewer planner steps):
 
-## Roadmap
-
-Phase 1:
-- CLI chat, setup wizard, LLM router, CLI detector, terminal/file/browser tools, JSON memory, logging, basic sub-agent runtime.
-
-Phase 2:
-- Real Codex/Claude prompt adapters per installed CLI version, Ollama/OpenRouter hardening, provider health cache.
-
-Phase 3:
-- Rich sub-agent queues, concurrent workers, budget accounting, task resume.
-
-Phase 4:
-- Telegram bot, WebSocket, React/Vite dashboard.
-
-Phase 5:
-- Vector memory ranking, episodic summaries, project memory, memory compaction.
-
-Phase 6:
-- Sandboxed terminal, encrypted vault hardening, audit exports, deployment profiles.
+```bash
+REXA_TOKEN_SAVER=1 rexa chat
+# or set permanently in setup wizard.
+```

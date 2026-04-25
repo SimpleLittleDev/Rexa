@@ -46,3 +46,6 @@ function suffix(meta?: Record<string, unknown>): string {
   if (!meta || Object.keys(meta).length === 0) return "";
   return " " + color.dim(JSON.stringify(meta));
 }
+
+/** Default logger instance for ad-hoc use. */
+export const logger = createLogger("rexa");

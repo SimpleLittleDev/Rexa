@@ -57,7 +57,14 @@ export class Orchestrator {
     const memoryContext = await this.memory.summarize(message);
 
     state.transition("running");
-    await progress(`Memilih role model: ${plan.recommendedRole}.`);
+    const role = this.appConfig.tokenSaver.enabled && this.appConfig.tokenSaver.preferCheapRole
+      ? "cheap"
+      : plan.recommendedRole;
+    if (this.appConfig.tokenSaver.enabled && plan.steps.length > this.appConfig.tokenSaver.maxPlannerSteps) {
+      plan.steps = plan.steps.slice(0, this.appConfig.tokenSaver.maxPlannerSteps);
+      state.setPlan(plan.steps);
+    }
+    await progress(`Memilih role model: ${role}${role !== plan.recommendedRole ? " (token-saver)" : ""}.`);
 
     if (plan.intent.type === "browser") {
       const responseText = await this.executeBrowserTask(message, options);
@@ -102,7 +109,7 @@ export class Orchestrator {
         subagentSummary += `\n\nSub-agent ${result.name} (${result.role}): ${result.summary}\nValidation: ${validation.valid ? "valid" : validation.risks.join(", ")}`;
         if (result.status !== "completed") {
           await progress(`Sub-agent ${result.name} gagal, mencoba fallback role ${plan.recommendedRole}.`);
-          const fallback = await this.router.generateForRole(plan.recommendedRole, {
+          const fallback = await this.router.generateForRole(role, {
             messages: [
               { role: "system", content: "You are Rexa fallback executor. Summarize the task and propose the next safe step." },
               { role: "user", content: `Original task: ${message}\nSub-agent failure: ${result.summary}` },
@@ -113,9 +120,10 @@ export class Orchestrator {
       }
     }
 
-    const response = await this.router.generateForRole(plan.recommendedRole, {
+    const systemPrompt = this.appConfig.tokenSaver.enabled ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
+    const response = await this.router.generateForRole(role, {
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         {
           role: "user",
           content: `User request: ${message}\n\nDetected intent: ${plan.intent.type} (multiStep=${plan.intent.multiStep}, risk=${plan.intent.risk})\n\nPlanner steps:\n${plan.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n\nRelevant memory:\n${memoryContext || "(empty)"}${subagentSummary}`,
@@ -164,6 +172,13 @@ const SYSTEM_PROMPT = [
   "When you are unsure or risk irreversible actions (sending, publishing, deleting, paying), ask for confirmation first.",
   "Cite sources or quote evidence when you have them; if memory is empty, state assumptions clearly.",
   "Never reveal private chain-of-thought; share only the final reasoning and conclusions the user needs.",
+].join(" ");
+
+const SYSTEM_PROMPT_LITE = [
+  "You are Rexa in token-saver mode.",
+  "Answer in 1-3 sentences. No filler, no chain-of-thought.",
+  "Match the user's language. Skip planner steps that don't apply.",
+  "Refuse irreversible actions unless explicitly confirmed.",
 ].join(" ");
 
 function initialTaskState(taskId: string, userId: string): TaskState {

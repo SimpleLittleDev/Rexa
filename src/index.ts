@@ -55,11 +55,26 @@ async function main(): Promise<void> {
   }
 
   if (command === "whatsapp") {
-    const runtime = await createRexaRuntime();
+    const sub = process.argv[3];
     const whatsapp = new WhatsAppChatProvider();
+    if (sub === "logout") {
+      await whatsapp.logout();
+      console.log(`${color.green("✔")} WhatsApp session cleared. Run 'rexa whatsapp' to scan a new QR.`);
+      return;
+    }
+    if (sub === "status") {
+      const s = whatsapp.status();
+      console.log(table([
+        [color.dim("paired"), s.paired ? color.green("yes") : color.yellow("no")],
+        [color.dim("user"), s.user ?? color.dim("(unpaired)")],
+        [color.dim("auth dir"), s.authDir],
+      ]));
+      return;
+    }
+    const runtime = await createRexaRuntime();
     attachAgentToChatProvider(whatsapp, runtime.agent);
     await whatsapp.start();
-    console.log(`${color.green("✔")} Rexa WhatsApp webhook listening on ${whatsapp.url()}`);
+    console.log(`${color.green("✔")} WhatsApp running. Press Ctrl+C to stop.`);
     return;
   }
 
@@ -188,7 +203,7 @@ function printHelp(): void {
       [
         `${color.brightCyan("chat")}      ${color.dim("Interactive CLI chat in this terminal")}`,
         `${color.brightCyan("telegram")}  ${color.dim("Start Telegram bot (needs TELEGRAM_BOT_TOKEN)")}`,
-        `${color.brightCyan("whatsapp")}  ${color.dim("Start WhatsApp Cloud API webhook")}`,
+        `${color.brightCyan("whatsapp")}  ${color.dim("WhatsApp via QR pairing (status / logout subcommands)")}`,
         `${color.brightCyan("ws")}        ${color.dim("Start WebSocket chat (alias: websocket)")}`,
         `${color.brightCyan("web")}       ${color.dim("Start localhost web chat UI")}`,
         `${color.brightCyan("api")}       ${color.dim("Start localhost REST API")}`,

@@ -238,10 +238,8 @@ export function providerSecretsNeeded(app: AppConfig, env: Record<string, string
     needed.push(app.chatProviders.telegram.tokenEnv);
   }
   if (app.chatProviders.whatsapp.enabled) {
-    const whatsapp = app.chatProviders.whatsapp;
-    for (const key of [whatsapp.accessTokenEnv, whatsapp.phoneNumberIdEnv, whatsapp.verifyTokenEnv]) {
-      if (!env[key]) needed.push(key);
-    }
+    // QR-based — no env secrets required. Pairing happens at first run via
+    // `rexa whatsapp` (or the post-setup launcher).
   }
   return needed;
 }
@@ -270,9 +268,6 @@ async function collectProviderSecrets(rootDir: string, app: AppConfig): Promise<
 
 function secretLabel(key: string): string {
   if (key === "TELEGRAM_BOT_TOKEN") return "Telegram Bot Token (BotFather)";
-  if (key === "WHATSAPP_ACCESS_TOKEN") return "WhatsApp Cloud API access token";
-  if (key === "WHATSAPP_PHONE_NUMBER_ID") return "WhatsApp phone number id";
-  if (key === "WHATSAPP_VERIFY_TOKEN") return "WhatsApp webhook verify token";
   return `Set value untuk ${key}`;
 }
 
@@ -345,7 +340,7 @@ function setupFields(
       label: "Chat provider",
       value: firstEnabledChat(config.app.enabledChatProviders),
       choices: ["cli", "telegram", "whatsapp", "rest", "websocket", "web", "all-local"],
-      help: "Telegram/WhatsApp butuh token. all-local aktifkan CLI + REST + WebSocket + Web sekaligus.",
+      help: "Telegram butuh BotFather token. WhatsApp pakai QR pairing (tidak perlu token). all-local = CLI+REST+WebSocket+Web.",
     },
     {
       group: "Browser",
