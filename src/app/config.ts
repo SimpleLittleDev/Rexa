@@ -27,6 +27,34 @@ export interface AppConfig {
   mcp: MCPConfig;
   sandbox: SandboxConfig;
   codeIntel: CodeIntelConfig;
+  research: ResearchConfig;
+  computerUse: ComputerUseConfigEntry;
+}
+
+export interface ResearchConfig {
+  enabled: boolean;
+  /** Cap how many sub-queries the planner is allowed to derive. */
+  maxSubQueries: number;
+  /** How many search results to consider per sub-query. */
+  resultsPerQuery: number;
+  /** How many of the ranked sources to actually fetch + read. */
+  fetchTopK: number;
+  /** Soft wall-clock cap for the whole pipeline. */
+  timeoutMs: number;
+  /** Default LLM role for synthesis. */
+  defaultRole: string;
+  /** Default response language. */
+  defaultLanguage: "id" | "en";
+}
+
+export interface ComputerUseConfigEntry {
+  enabled: boolean;
+  /** Backend selection: "auto" picks the best for the host. */
+  backend: "auto" | "linux-xdotool" | "macos" | "windows" | "android-adb" | "none";
+  /** Where to write screenshots (relative to Rexa home). */
+  screenshotDir: string;
+  /** ADB device serial when backend = android-adb. */
+  androidSerialEnv: string;
 }
 
 export interface MCPConfig {
@@ -317,6 +345,21 @@ export function defaultAppConfig(): AppConfig {
       enabled: true,
       languageServers: [],
       treeSitterWasmDir: "data/tree-sitter",
+    },
+    research: {
+      enabled: true,
+      maxSubQueries: 4,
+      resultsPerQuery: 5,
+      fetchTopK: 6,
+      timeoutMs: 60_000,
+      defaultRole: "research",
+      defaultLanguage: "id",
+    },
+    computerUse: {
+      enabled: parseEnvBool(process.env.REXA_COMPUTER_USE, true),
+      backend: "auto",
+      screenshotDir: "data/screenshots",
+      androidSerialEnv: "ANDROID_SERIAL",
     },
   };
 }
