@@ -23,6 +23,8 @@ import type { StorageAdapter } from "../storage/storage-adapter.interface";
 import { Telemetry } from "../logs/telemetry";
 import { MCPRegistry } from "../mcp/mcp-registry";
 import { SandboxManager } from "../security/sandbox";
+import { ResearchEngine } from "../research/research-engine";
+import { ComputerUseManager } from "../computer-use/computer-use-manager";
 
 export interface RexaRuntime {
   config: RexaConfigBundle;
@@ -33,6 +35,8 @@ export interface RexaRuntime {
   telemetry: Telemetry;
   mcp: MCPRegistry;
   sandbox: SandboxManager;
+  research: ResearchEngine;
+  computerUse: ComputerUseManager;
 }
 
 export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<RexaRuntime> {
@@ -69,6 +73,13 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
     // Connect MCP servers in the background — failures shouldn't block boot.
     void mcp.connectAll(config.app.mcp.servers);
   }
+  const research = new ResearchEngine({ router });
+  const computerUse = new ComputerUseManager({
+    enabled: config.app.computerUse.enabled,
+    backend: config.app.computerUse.backend,
+    screenshotDir: resolveProjectPath(rootDir, config.app.computerUse.screenshotDir),
+    androidSerial: process.env[config.app.computerUse.androidSerialEnv],
+  });
   const orchestrator = new Orchestrator(router, memory, config.agents, config.app);
   return {
     config,
@@ -79,6 +90,8 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
     telemetry,
     mcp,
     sandbox,
+    research,
+    computerUse,
   };
 }
 

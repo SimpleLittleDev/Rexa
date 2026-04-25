@@ -148,6 +148,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "research" || command === "deep-research") {
+    await runResearchCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (command === "computer" || command === "os") {
+    await runComputerCommand(process.argv.slice(3));
+    return;
+  }
+
   if (command === "demo-flow" || command === "demo") {
     const runtime = await createRexaRuntime();
     const result = await runtime.agent.run(
@@ -277,6 +287,8 @@ function printHelp(): void {
         `${color.brightCyan("code")}      ${color.dim("Subcommands: search | def | refs | validate-patch")}`,
         `${color.brightCyan("mcp")}       ${color.dim("Subcommands: list | test <server>  (Model Context Protocol)")}`,
         `${color.brightCyan("sandbox")}   ${color.dim("Subcommands: info | run <command>  (bubblewrap/sandbox-exec/job-object)")}`,
+        `${color.brightCyan("research")}  ${color.dim("Deep web research with citations: rexa research \"<question>\"")}`,
+        `${color.brightCyan("computer")}  ${color.dim("Subcommands: info | screenshot | click | type | key  (OS automation)")}`,
       ].join("\n"),
       2,
     ),
@@ -659,6 +671,92 @@ function parseDuration(text: string): number {
   const unit = (match[2] ?? "s").toLowerCase();
   const multipliers: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
   return value * (multipliers[unit] ?? 1_000);
+}
+
+async function runResearchCommand(args: string[]): Promise<void> {
+  const question = args.filter((a) => !a.startsWith("--")).join(" ").trim();
+  if (!question) {
+    console.error(color.red("usage: rexa research \"<question>\" [--max-sub N] [--top-k N] [--lang id|en]"));
+    process.exitCode = 1;
+    return;
+  }
+  const maxSub = Number(parseStringFlag(args, "--max-sub") ?? "");
+  const topK = Number(parseStringFlag(args, "--top-k") ?? "");
+  const lang = parseStringFlag(args, "--lang") as "id" | "en" | null;
+  const runtime = await createRexaRuntime();
+  console.log(color.dim(`[research] question: ${question}`));
+  const started = Date.now();
+  const result = await runtime.research.run(question, {
+    maxSubQueries: Number.isFinite(maxSub) && maxSub > 0 ? maxSub : undefined,
+    fetchTopK: Number.isFinite(topK) && topK > 0 ? topK : undefined,
+    language: lang ?? undefined,
+  });
+  console.log(section("Sub-queries"));
+  for (const q of result.subQueries) console.log("  - " + q);
+  console.log(section("Sources"));
+  for (const c of result.citations) {
+    console.log(`  [${c.index}] ${color.bold(c.title)}`);
+    console.log("      " + color.dim(c.url));
+  }
+  console.log(section("Answer"));
+  console.log(result.answer);
+  console.log(color.dim(`\n[research] ${result.sources.length} sources, ${Date.now() - started} ms`));
+}
+
+async function runComputerCommand(args: string[]): Promise<void> {
+  const sub = args[0] ?? "info";
+  const runtime = await createRexaRuntime();
+  if (sub === "info") {
+    const adapter = await runtime.computerUse.adapter();
+    const all = await runtime.computerUse.availableBackends();
+    console.log(section("Computer-use"));
+    console.log("  active : " + color.bold(adapter.name));
+    console.log("  available : " + all.join(", "));
+    console.log("  enabled : " + (runtime.config.app.computerUse.enabled ? color.green("yes") : color.yellow("no")));
+    return;
+  }
+  if (sub === "screenshot") {
+    const path = parseStringFlag(args, "--out") ?? undefined;
+    const shot = await runtime.computerUse.screenshot(path);
+    console.log(color.green("✔ saved ") + shot.path);
+    return;
+  }
+  if (sub === "click") {
+    const x = Number(args[1]);
+    const y = Number(args[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      console.error(color.red("usage: rexa computer click <x> <y>"));
+      process.exitCode = 1;
+      return;
+    }
+    await runtime.computerUse.click(x, y);
+    console.log(color.green(`✔ clicked at (${x}, ${y})`));
+    return;
+  }
+  if (sub === "type") {
+    const text = args.slice(1).join(" ");
+    if (!text) {
+      console.error(color.red("usage: rexa computer type <text>"));
+      process.exitCode = 1;
+      return;
+    }
+    await runtime.computerUse.type(text);
+    console.log(color.green(`✔ typed ${text.length} chars`));
+    return;
+  }
+  if (sub === "key") {
+    const key = args[1];
+    if (!key) {
+      console.error(color.red("usage: rexa computer key <key>"));
+      process.exitCode = 1;
+      return;
+    }
+    await runtime.computerUse.key(key);
+    console.log(color.green(`✔ pressed ${key}`));
+    return;
+  }
+  console.error(color.red(`Unknown computer subcommand: ${sub}`));
+  process.exitCode = 1;
 }
 
 main().catch((error) => {
