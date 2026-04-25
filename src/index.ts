@@ -103,6 +103,36 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "daemon") {
+    await runDaemonCommand(process.argv.slice(3), home);
+    return;
+  }
+
+  if (command === "watch") {
+    await runWatchCommand(process.argv.slice(3), home);
+    return;
+  }
+
+  if (command === "schedule") {
+    await runScheduleCommand(process.argv.slice(3), home);
+    return;
+  }
+
+  if (command === "task") {
+    await runTaskCommand(process.argv.slice(3), home);
+    return;
+  }
+
+  if (command === "cost") {
+    await runCostCommand(process.argv.slice(3), home);
+    return;
+  }
+
+  if (command === "update") {
+    await runUpdateCommand(home);
+    return;
+  }
+
   if (command === "demo-flow" || command === "demo") {
     const runtime = await createRexaRuntime();
     const result = await runtime.agent.run(
@@ -212,10 +242,25 @@ function printHelp(): void {
     ),
   );
   console.log();
-  console.log(header("Demos"));
+  console.log(header("Background daemon & multitasking"));
   console.log(
     indent(
       [
+        `${color.brightCyan("daemon")}    ${color.dim("Subcommands: start | stop | status | log")}`,
+        `${color.brightCyan("watch")}     ${color.dim("watch <url> --interval 30s --duration 5h --on-change <cmd>")}`,
+        `${color.brightCyan("schedule")}  ${color.dim('schedule "<cron>" "<command>"  (5-field cron)')}`,
+        `${color.brightCyan("task")}      ${color.dim("Subcommands: list | cancel <id> | rm <id> | log <id>")}`,
+      ].join("\n"),
+      2,
+    ),
+  );
+  console.log();
+  console.log(header("Maintenance"));
+  console.log(
+    indent(
+      [
+        `${color.brightCyan("update")}    ${color.dim("Pull latest, install, rebuild, relink")}`,
+        `${color.brightCyan("cost")}      ${color.dim("Show token + cost telemetry roll-up")}`,
         `${color.brightCyan("demo")}      ${color.dim("Run main-agent + sub-agent demo flow")}`,
       ].join("\n"),
       2,
@@ -223,7 +268,224 @@ function printHelp(): void {
   );
   console.log();
   console.log(divider());
-  console.log(color.dim("Examples: ") + color.brightCyan("npm run setup") + color.dim(" • ") + color.brightCyan("npm run chat") + color.dim(" • ") + color.brightCyan("npm run doctor"));
+  console.log(color.dim("Examples: ") + color.brightCyan("rexa setup") + color.dim(" • ") + color.brightCyan("rexa chat") + color.dim(" • ") + color.brightCyan("rexa daemon start") + color.dim(" • ") + color.brightCyan("REXA_TOKEN_SAVER=1 rexa chat"));
+}
+
+// ---------- Daemon / multitasking commands ----------
+
+async function runDaemonCommand(args: string[], home: string): Promise<void> {
+  const { DaemonManager } = await import("./daemon/daemon-manager");
+  const { loadConfig } = await import("./app/config");
+  const bundle = await loadConfig(home);
+  const manager = new DaemonManager(bundle.app.daemon);
+  const sub = args[0] ?? "status";
+
+  if (sub === "start") {
+    const entrypoint = resolveDaemonEntrypoint(home);
+    const status = await manager.start(entrypoint);
+    console.log(`${color.green("✔")} daemon running pid=${status.pid}`);
+    console.log(color.dim(`log: ${manager.logPath()}`));
+    return;
+  }
+  if (sub === "stop") {
+    const stopped = await manager.stop();
+    console.log(stopped ? `${color.green("✔")} daemon stopped` : color.dim("daemon not running"));
+    return;
+  }
+  if (sub === "status") {
+    const status = await manager.status();
+    console.log(table([
+      [color.dim("running"), status.running ? color.green("yes") : color.yellow("no")],
+      [color.dim("pid"), status.pid !== null ? String(status.pid) : color.dim("-")],
+      [color.dim("started"), status.startedAt ?? color.dim("-")],
+      [color.dim("pidfile"), status.pidFile],
+    ]));
+    return;
+  }
+  if (sub === "log") {
+    const { spawn } = await import("node:child_process");
+    spawn("tail", ["-f", manager.logPath()], { stdio: "inherit" });
+    return;
+  }
+  console.error(color.red(`Unknown daemon subcommand: ${sub}`));
+  process.exitCode = 1;
+}
+
+function resolveDaemonEntrypoint(home: string): string {
+  const compiled = join(home, "dist", "src", "daemon", "daemon-worker.js");
+  return compiled;
+}
+
+async function runWatchCommand(args: string[], home: string): Promise<void> {
+  const url = args[0];
+  if (!url || url.startsWith("--")) {
+    console.error(color.red("usage: rexa watch <url> [--interval 30s] [--duration 5h] [--on-change <cmd>]"));
+    process.exitCode = 1;
+    return;
+  }
+  const interval = parseDurationFlag(args, "--interval", "30s");
+  const duration = parseDurationFlag(args, "--duration", "0");
+  const onChange = parseStringFlag(args, "--on-change");
+  const queue = await openQueue(home);
+  const expiresAt = duration > 0 ? new Date(Date.now() + duration).toISOString() : null;
+  const task = await queue.create({
+    kind: "watch",
+    payload: { url },
+    intervalMs: interval,
+    nextRunAt: new Date(Date.now() + 1_000).toISOString(),
+    expiresAt,
+    cron: null,
+    onChange: onChange ?? null,
+  });
+  console.log(`${color.green("✔")} watch queued id=${task.id}`);
+  console.log(color.dim(`Run \`rexa daemon start\` (if not already) so the watcher executes.`));
+}
+
+async function runScheduleCommand(args: string[], home: string): Promise<void> {
+  const cron = args[0];
+  const command = args.slice(1).join(" ");
+  if (!cron || !command) {
+    console.error(color.red('usage: rexa schedule "<cron>" "<command>"'));
+    process.exitCode = 1;
+    return;
+  }
+  const queue = await openQueue(home);
+  const task = await queue.create({
+    kind: "schedule",
+    payload: { command },
+    cron,
+    intervalMs: null,
+    nextRunAt: new Date(Date.now() + 60_000).toISOString(),
+    expiresAt: null,
+    onChange: null,
+  });
+  console.log(`${color.green("✔")} scheduled id=${task.id} (${cron})`);
+}
+
+async function runTaskCommand(args: string[], home: string): Promise<void> {
+  const queue = await openQueue(home);
+  const sub = args[0] ?? "list";
+  if (sub === "list") {
+    const tasks = await queue.list();
+    if (tasks.length === 0) {
+      console.log(color.dim("(no tasks)"));
+      return;
+    }
+    console.log(table(tasks.map((task) => [
+      task.id.slice(0, 12),
+      task.kind,
+      task.status,
+      task.cron ?? (task.intervalMs ? `${task.intervalMs}ms` : "once"),
+      task.nextRunAt ?? "-",
+      `runs=${task.runCount}`,
+    ])));
+    return;
+  }
+  if (sub === "cancel") {
+    const id = args[1];
+    if (!id) {
+      console.error(color.red("usage: rexa task cancel <id>"));
+      process.exitCode = 1;
+      return;
+    }
+    const ok = await queue.cancel(id);
+    console.log(ok ? `${color.green("✔")} cancelled ${id}` : color.red(`task not found: ${id}`));
+    return;
+  }
+  if (sub === "rm") {
+    const id = args[1];
+    if (!id) {
+      console.error(color.red("usage: rexa task rm <id>"));
+      process.exitCode = 1;
+      return;
+    }
+    const ok = await queue.remove(id);
+    console.log(ok ? `${color.green("✔")} removed ${id}` : color.red(`task not found: ${id}`));
+    return;
+  }
+  console.error(color.red(`Unknown task subcommand: ${sub}`));
+  process.exitCode = 1;
+}
+
+async function runCostCommand(_args: string[], home: string): Promise<void> {
+  const { Telemetry } = await import("./logs/telemetry");
+  const telemetry = new Telemetry({ enabled: true, logPath: join(home, "logs", "telemetry.jsonl"), persistCost: true });
+  const summary = await telemetry.summary();
+  if (summary.totalEvents === 0) {
+    console.log(color.dim("No telemetry events yet."));
+    return;
+  }
+  console.log(section("Cost rollup") + "\n");
+  console.log(table([
+    [color.dim("events"), String(summary.totalEvents)],
+    [color.dim("input tokens"), summary.totalInputTokens.toLocaleString()],
+    [color.dim("output tokens"), summary.totalOutputTokens.toLocaleString()],
+    [color.dim("total cost"), `$${summary.totalCostUsd.toFixed(4)}`],
+    [color.dim("first event"), summary.firstAt ?? "-"],
+    [color.dim("last event"), summary.lastAt ?? "-"],
+  ]));
+  console.log("\n" + section("By provider") + "\n");
+  console.log(table(Object.entries(summary.byProvider).map(([provider, stats]) => [
+    provider, `${stats.events} ev`, `$${stats.costUsd.toFixed(4)}`,
+  ])));
+  console.log("\n" + section("By role") + "\n");
+  console.log(table(Object.entries(summary.byRole).map(([role, stats]) => [
+    role, `${stats.events} ev`, `$${stats.costUsd.toFixed(4)}`,
+  ])));
+}
+
+async function runUpdateCommand(home: string): Promise<void> {
+  const { spawnSync } = await import("node:child_process");
+  console.log(color.dim(`Updating Rexa at ${home}...`));
+  const steps: Array<{ label: string; cmd: string; args: string[] }> = [
+    { label: "git fetch", cmd: "git", args: ["-C", home, "fetch", "--all", "--prune"] },
+    { label: "git pull", cmd: "git", args: ["-C", home, "pull", "--ff-only"] },
+    { label: "npm install", cmd: "npm", args: ["--prefix", home, "install"] },
+    { label: "npm run build", cmd: "npm", args: ["--prefix", home, "run", "build"] },
+  ];
+  for (const step of steps) {
+    console.log(color.dim(`> ${step.label}`));
+    const result = spawnSync(step.cmd, step.args, { stdio: "inherit" });
+    if (result.status !== 0) {
+      console.error(color.red(`${step.label} failed (exit ${result.status})`));
+      process.exitCode = 1;
+      return;
+    }
+  }
+  console.log(`${color.green("✔")} update complete`);
+}
+
+async function openQueue(home: string) {
+  const { TaskQueue } = await import("./daemon/task-queue");
+  const { loadConfig } = await import("./app/config");
+  const bundle = await loadConfig(home);
+  const path = bundle.app.daemon.queuePath.startsWith("/")
+    ? bundle.app.daemon.queuePath
+    : join(home, bundle.app.daemon.queuePath);
+  const queue = new TaskQueue(path);
+  await queue.load();
+  return queue;
+}
+
+function parseDurationFlag(args: string[], name: string, fallback: string): number {
+  const idx = args.indexOf(name);
+  if (idx === -1 || !args[idx + 1]) return parseDuration(fallback);
+  return parseDuration(args[idx + 1]);
+}
+
+function parseStringFlag(args: string[], name: string): string | null {
+  const idx = args.indexOf(name);
+  if (idx === -1) return null;
+  return args[idx + 1] ?? null;
+}
+
+function parseDuration(text: string): number {
+  const match = /^(\d+)\s*(ms|s|m|h|d)?$/i.exec(text.trim());
+  if (!match) return 0;
+  const value = Number(match[1]);
+  const unit = (match[2] ?? "s").toLowerCase();
+  const multipliers: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  return value * (multipliers[unit] ?? 1_000);
 }
 
 main().catch((error) => {

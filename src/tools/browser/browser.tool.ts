@@ -1,6 +1,7 @@
 import { fail, ok, type ToolResult } from "../../common/result";
 import { browserScreenshotPath, type BrowserAction, type BrowserAgentReportingOptions } from "./browser-agent-observer";
 import { ChromiumAdapter } from "./chromium.adapter";
+import type { CaptchaSolver, CaptchaTask, CaptchaResult } from "./captcha-solver";
 
 export interface BrowserAdapter {
   open(url: string): Promise<void>;
@@ -34,7 +35,144 @@ export class BrowserTool {
   constructor(
     private readonly adapter: BrowserAdapter = new ChromiumAdapter(),
     private readonly reporting: BrowserAgentReportingOptions = {},
+    private readonly captchaSolver?: CaptchaSolver,
   ) {}
+
+  /**
+   * Solve a CAPTCHA detected on the current page.
+   *
+   * Detects reCAPTCHA v2/v3, hCaptcha and Cloudflare Turnstile from the live
+   * DOM (via `evaluate`). For image/text captchas the caller can pass a
+   * `selector` pointing at the `<img>` element. Returns the token / answer.
+   */
+  async solveCaptcha(
+    options: {
+      selector?: string;
+      kind?: CaptchaTask["kind"];
+      pageUrl?: string;
+      action?: string;
+      minScore?: number;
+    } = {},
+  ): Promise<ToolResult<CaptchaResult>> {
+    if (!this.captchaSolver) {
+      return fail("CAPTCHA_DISABLED", "Captcha solver is not configured (provide CaptchaSolver to BrowserTool).", {
+        recoverable: true,
+      });
+    }
+    try {
+      const task = await this.detectCaptcha(options);
+      const result = await this.captchaSolver.solve(task);
+      await this.injectSolution(task, result);
+      await this.report("evaluate", `CAPTCHA solved via ${result.provider} (${task.kind}).`, {
+        metadata: { provider: result.provider, kind: task.kind, elapsedMs: result.elapsedMs },
+      });
+      return ok(result);
+    } catch (error) {
+      return browserError(error);
+    }
+  }
+
+  private async detectCaptcha(options: {
+    selector?: string;
+    kind?: CaptchaTask["kind"];
+    pageUrl?: string;
+    action?: string;
+    minScore?: number;
+  }): Promise<CaptchaTask> {
+    if (!this.adapter.evaluate) {
+      throw new Error("Adapter does not support evaluate(); cannot auto-detect captcha.");
+    }
+    const detected = (await this.adapter.evaluate(`(() => {
+      const url = location.href;
+      const recaptcha = document.querySelector('.g-recaptcha,[data-sitekey][data-callback],iframe[src*="recaptcha"]');
+      if (recaptcha) {
+        const sitekey = recaptcha.getAttribute('data-sitekey') ||
+          (recaptcha.src?.match(/[?&]k=([^&]+)/)?.[1]);
+        const v3 = !!document.querySelector('script[src*="recaptcha/api.js?render="]');
+        return { kind: v3 ? 'recaptcha-v3' : 'recaptcha-v2', siteKey: sitekey, pageUrl: url };
+      }
+      const hcaptcha = document.querySelector('.h-captcha,[data-sitekey][data-callback*="hcaptcha"],iframe[src*="hcaptcha"]');
+      if (hcaptcha) {
+        const sitekey = hcaptcha.getAttribute('data-sitekey') ||
+          (hcaptcha.src?.match(/[?&]sitekey=([^&]+)/)?.[1]);
+        return { kind: 'hcaptcha', siteKey: sitekey, pageUrl: url };
+      }
+      const turnstile = document.querySelector('.cf-turnstile,iframe[src*="challenges.cloudflare.com"]');
+      if (turnstile) {
+        const sitekey = turnstile.getAttribute('data-sitekey');
+        return { kind: 'turnstile', siteKey: sitekey, pageUrl: url };
+      }
+      return null;
+    })()`)) as { kind: CaptchaTask["kind"]; siteKey?: string; pageUrl: string } | null;
+
+    if (options.kind && options.kind !== "auto") {
+      return {
+        kind: options.kind,
+        pageUrl: options.pageUrl ?? detected?.pageUrl ?? "",
+        siteKey: detected?.siteKey,
+        action: options.action,
+        minScore: options.minScore,
+      };
+    }
+    if (detected) {
+      return {
+        kind: detected.kind,
+        pageUrl: detected.pageUrl,
+        siteKey: detected.siteKey,
+        action: options.action,
+        minScore: options.minScore,
+      };
+    }
+    if (options.selector) {
+      const imageBase64 = (await this.adapter.evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(options.selector)});
+        if (!el) return null;
+        if (el.tagName !== 'IMG') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = el.naturalWidth || el.width;
+        canvas.height = el.naturalHeight || el.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(el, 0, 0);
+        return canvas.toDataURL('image/png').split(',')[1];
+      })()`)) as string | null;
+      if (!imageBase64) throw new Error(`No <img> matched selector ${options.selector}`);
+      return {
+        kind: "image",
+        pageUrl: options.pageUrl ?? "",
+        imageBase64,
+      };
+    }
+    throw new Error("Could not detect CAPTCHA on current page; pass `selector` or `kind` explicitly.");
+  }
+
+  private async injectSolution(task: CaptchaTask, result: CaptchaResult): Promise<void> {
+    if (!this.adapter.evaluate) return;
+    if (task.kind === "recaptcha-v2" || task.kind === "recaptcha-v3") {
+      await this.adapter.evaluate(`(() => {
+        const t = document.getElementById('g-recaptcha-response');
+        if (t) { t.value = ${JSON.stringify(result.solution)}; t.style.display = 'block'; }
+        if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
+          try {
+            const cfg = window.___grecaptcha_cfg.clients;
+            for (const id of Object.keys(cfg)) {
+              const cb = cfg[id]?.aa?.l?.callback || cfg[id]?.K?.K?.callback;
+              if (typeof cb === 'function') cb(${JSON.stringify(result.solution)});
+            }
+          } catch {}
+        }
+      })()`);
+    } else if (task.kind === "hcaptcha") {
+      await this.adapter.evaluate(`(() => {
+        const t = document.querySelector('[name="h-captcha-response"]');
+        if (t) t.value = ${JSON.stringify(result.solution)};
+      })()`);
+    } else if (task.kind === "turnstile") {
+      await this.adapter.evaluate(`(() => {
+        const t = document.querySelector('[name="cf-turnstile-response"]');
+        if (t) t.value = ${JSON.stringify(result.solution)};
+      })()`);
+    }
+  }
 
   async open(url: string): Promise<ToolResult<{ url: string }>> {
     try {
