@@ -1,0 +1,44 @@
+{
+  "roles": {
+    "main": {
+      "provider": "codex-cli",
+      "model": "gpt-5.5",
+      "fallbackProviders": [
+        "mock",
+        "openai",
+        "ollama"
+      ]
+    },
+    "coding": {
+      "provider": "codex-cli",
+      "model": "gpt-5.4",
+      "fallbackProviders": [
+        "mock",
+        "openai",
+        "ollama"
+      ]
+    },
+    "browser": {
+      "provider": "claude-code",
+      "model": "auto",
+      "fallbackProviders": [
+        "mock",
+        "openai"
+      ]
+    },
+    "cheap": {
+      "provider": "ollama",
+      "model": "local-small-model",
+      "fallbackProviders": [
+        "mock"
+      ]
+    },
+    "fallback": {
+      "provider": "mock",
+      "model": "local-mock-fallback"
+    }
+  },
+  "fallbackOrder": [
+    "mock"
+  ]
+}

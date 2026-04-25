@@ -1,0 +1,10 @@
+services:
+  rexa:
+    build: .
+    ports:
+      - "127.0.0.1:8786:8786"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs

@@ -1,0 +1,58 @@
+{
+  "name": "Rexa",
+  "version": "0.1.0",
+  "permissionMode": "balanced",
+  "maxToolCallsPerTask": 30,
+  "maxSubAgents": 3,
+  "maxRetries": 2,
+  "maxExecutionTimeMs": 600000,
+  "maxLLMCostPerTask": 1,
+  "maxMemoryChunks": 8,
+  "enabledChatProviders": [
+    "telegram"
+  ],
+  "browserMode": "termux-chromium",
+  "chatProviders": {
+    "cli": {
+      "enabled": false
+    },
+    "telegram": {
+      "enabled": true,
+      "tokenEnv": "TELEGRAM_BOT_TOKEN"
+    },
+    "whatsapp": {
+      "enabled": false,
+      "mode": "cloud-api",
+      "accessTokenEnv": "WHATSAPP_ACCESS_TOKEN",
+      "phoneNumberIdEnv": "WHATSAPP_PHONE_NUMBER_ID",
+      "verifyTokenEnv": "WHATSAPP_VERIFY_TOKEN",
+      "port": 8792
+    },
+    "rest": {
+      "enabled": false,
+      "port": 8786
+    },
+    "websocket": {
+      "enabled": false,
+      "port": 8788
+    },
+    "web": {
+      "enabled": false,
+      "port": 8787
+    }
+  },
+  "browserAgent": {
+    "enabled": true,
+    "pointerEnabled": true,
+    "screenshotUpdates": true,
+    "screenshotDir": "data/browser-screenshots",
+    "updateAfterActions": [
+      "open",
+      "click",
+      "moveMouse",
+      "type",
+      "scroll",
+      "uploadFile"
+    ]
+  }
+}

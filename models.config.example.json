@@ -1,0 +1,19 @@
+{
+  "roles": {
+    "main": {
+      "provider": "codex-cli",
+      "model": "model-from-your-config",
+      "fallbackProviders": ["openai", "mock"]
+    },
+    "coding": {
+      "provider": "codex-cli",
+      "model": "coding-model-from-your-config",
+      "fallbackProviders": ["mock"]
+    },
+    "fallback": {
+      "provider": "mock",
+      "model": "local-mock-fallback"
+    }
+  },
+  "fallbackOrder": ["mock"]
+}

@@ -1,0 +1,22 @@
+{
+  "mainAgent": {
+    "name": "Rexa",
+    "role": "main-orchestrator",
+    "provider": "codex-cli",
+    "model": "model-from-config",
+    "tools": ["browser", "terminal", "file", "memory", "subagent"],
+    "memoryScope": "global"
+  },
+  "subAgentPolicy": {
+    "enabled": true,
+    "sameProviderAsMain": true,
+    "maxAgents": 3,
+    "allowedTools": ["browser", "terminal", "file", "memory"],
+    "defaultMemoryScope": "task-only",
+    "defaultBudget": {
+      "maxToolCalls": 10,
+      "maxExecutionTimeMs": 300000,
+      "maxCostUsd": 0.5
+    }
+  }
+}

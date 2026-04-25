@@ -1,0 +1,53 @@
+{
+  "name": "rexa",
+  "version": "0.1.0",
+  "description": "Rexa personal autonomous AI assistant foundation",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "rexa": "dist/src/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "setup": "tsx src/index.ts setup",
+    "chat": "tsx src/index.ts chat",
+    "doctor": "tsx src/index.ts doctor",
+    "demo": "tsx src/index.ts demo-flow",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    },
+    "puppeteer": {
+      "optional": true
+    },
+    "telegraf": {
+      "optional": true
+    },
+    "ws": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "ws": "^8.20.0"
+  }
+}

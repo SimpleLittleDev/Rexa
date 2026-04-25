@@ -1,0 +1,22 @@
+{
+  "defaultStorage": "json",
+  "availableStorage": [
+    "json",
+    "sqlite",
+    "postgres",
+    "memory"
+  ],
+  "json": {
+    "path": "data/storage.json"
+  },
+  "sqlite": {
+    "path": "data/rexa.sqlite"
+  },
+  "postgres": {
+    "connectionStringEnv": "DATABASE_URL"
+  },
+  "vector": {
+    "provider": "local",
+    "path": "data/vector.json"
+  }
+}
