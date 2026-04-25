@@ -27,6 +27,8 @@ export interface CaptchaTask {
   question?: string;
   /** Whether to use proxy (some providers need this for region-locked sites). */
   proxy?: { url: string; type?: "http" | "https" | "socks4" | "socks5" };
+  /** Optional base64 audio (wav/mp3) for audio reCAPTCHA fallback. */
+  audioBase64?: string;
 }
 
 export interface CaptchaResult {
@@ -43,19 +45,60 @@ export interface VisionLLMSolver {
   solveImage(task: { imageBase64: string; question?: string }): Promise<string>;
 }
 
+export interface AudioSolver {
+  /** Transcribe an audio reCAPTCHA challenge. */
+  transcribe(task: { audioBase64: string }): Promise<string>;
+}
+
+export interface InteractiveSolver {
+  /**
+   * Last-resort: ask a human to solve. Returns the answer/token. Implementers
+   * should respect any timeout encoded in the message and gracefully reject
+   * when no human is available (so we can decide to give up vs retry).
+   */
+  prompt(task: CaptchaTask, prompt: string): Promise<string>;
+}
+
+export interface CaptchaSolverDeps {
+  visionFallback?: VisionLLMSolver;
+  audioFallback?: AudioSolver;
+  interactiveFallback?: InteractiveSolver;
+}
+
+type ProviderId = CaptchaConfig["providers"][number];
+
 /**
- * Multi-provider CAPTCHA solver with graceful fallback.
+ * Multi-provider CAPTCHA solver with graceful, efficiency-first fallback.
  *
- * Provider order is taken from `CaptchaConfig.providers`. Each provider is
- * tried in turn; when one returns a solution we return it. The vision-LLM
- * fallback is suitable for plain image/text captchas only — it cannot solve
- * reCAPTCHA / hCaptcha / Turnstile directly.
+ * Routing rules:
+ *  1. Filter out providers whose required env-var is missing — never waste
+ *     time submitting to a paid service we have no key for.
+ *  2. For image/text captchas, prefer the (free) vision-LLM fallback
+ *     before paid services, then external providers as backup.
+ *  3. For token-based captchas (reCAPTCHA / hCaptcha / Turnstile) try paid
+ *     providers in `config.providers` order. If none have keys, attempt
+ *     audio-challenge fallback (recaptcha-v2 only) via the audio solver.
+ *  4. As last resort, prompt the human via `interactiveFallback` if the
+ *     surface supports it.
  */
 export class CaptchaSolver {
+  private readonly visionFallback?: VisionLLMSolver;
+  private readonly audioFallback?: AudioSolver;
+  private readonly interactiveFallback?: InteractiveSolver;
+
   constructor(
     private readonly config: CaptchaConfig,
-    private readonly visionFallback?: VisionLLMSolver,
-  ) {}
+    deps: VisionLLMSolver | CaptchaSolverDeps = {},
+  ) {
+    if (deps && "solveImage" in deps) {
+      // Backwards-compatible single-arg form.
+      this.visionFallback = deps;
+    } else {
+      this.visionFallback = (deps as CaptchaSolverDeps).visionFallback;
+      this.audioFallback = (deps as CaptchaSolverDeps).audioFallback;
+      this.interactiveFallback = (deps as CaptchaSolverDeps).interactiveFallback;
+    }
+  }
 
   async solve(task: CaptchaTask): Promise<CaptchaResult> {
     if (!this.config.enabled) {
@@ -64,20 +107,100 @@ export class CaptchaSolver {
     const start = Date.now();
     const errors: string[] = [];
 
-    for (const provider of this.config.providers) {
+    const order = this.routeProviders(task);
+    if (order.length === 0) {
+      errors.push("no usable providers (missing keys + no fallback configured)");
+    }
+
+    for (const provider of order) {
       try {
         const solution = await this.callProvider(provider, task);
-        return { solution, provider, elapsedMs: Date.now() - start };
+        if (solution) {
+          return { solution, provider, elapsedMs: Date.now() - start, metadata: { tried: order } };
+        }
+        errors.push(`${provider}: empty solution`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         logger.warn(`[captcha] ${provider} failed`, { msg });
         errors.push(`${provider}: ${msg}`);
       }
     }
+
+    // Audio reCAPTCHA fallback: only meaningful for v2 with audio challenge data.
+    if (task.kind === "recaptcha-v2" && task.audioBase64 && this.audioFallback) {
+      try {
+        const transcript = await this.audioFallback.transcribe({ audioBase64: task.audioBase64 });
+        if (transcript) {
+          return { solution: transcript, provider: "audio-fallback", elapsedMs: Date.now() - start };
+        }
+      } catch (error) {
+        errors.push(`audio-fallback: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (this.interactiveFallback) {
+      try {
+        const answer = await this.interactiveFallback.prompt(
+          task,
+          `Captcha solver gagal. Type=${task.kind}. URL=${task.pageUrl}. Tolong solve manually & paste token/answer.`,
+        );
+        if (answer) {
+          return { solution: answer, provider: "interactive", elapsedMs: Date.now() - start };
+        }
+      } catch (error) {
+        errors.push(`interactive: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     throw new Error(`All captcha providers failed:\n${errors.join("\n")}`);
   }
 
-  private async callProvider(provider: CaptchaConfig["providers"][number], task: CaptchaTask): Promise<string> {
+  /** Decide provider order based on what's actually available + task kind. */
+  private routeProviders(task: CaptchaTask): ProviderId[] {
+    const isImage = task.kind === "image" || task.kind === "text";
+    const order: ProviderId[] = [];
+    const seen = new Set<ProviderId>();
+
+    const add = (provider: ProviderId): void => {
+      if (seen.has(provider)) return;
+      if (!this.providerSupports(provider, task)) return;
+      order.push(provider);
+      seen.add(provider);
+    };
+
+    // Image/text → prefer vision-LLM first (it's effectively free for the
+    // agent because it reuses the configured LLM).
+    if (isImage && this.visionFallback) {
+      add("vision-llm");
+    }
+    for (const provider of this.config.providers) {
+      add(provider);
+    }
+    // Make sure vision-LLM is at least at the end for image/text tasks.
+    if (isImage && this.visionFallback) {
+      add("vision-llm");
+    }
+    return order;
+  }
+
+  private providerSupports(provider: ProviderId, task: CaptchaTask): boolean {
+    if (provider === "vision-llm") {
+      if (!this.visionFallback) return false;
+      return task.kind === "image" || task.kind === "text";
+    }
+    const envKey =
+      provider === "2captcha"
+        ? this.config.apiKeyEnv.twoCaptcha
+        : provider === "anticaptcha"
+          ? this.config.apiKeyEnv.antiCaptcha
+          : provider === "capsolver"
+            ? this.config.apiKeyEnv.capSolver
+            : null;
+    if (envKey && !process.env[envKey]) return false;
+    return true;
+  }
+
+  private async callProvider(provider: ProviderId, task: CaptchaTask): Promise<string> {
     switch (provider) {
       case "2captcha":
         return await this.solveTwoCaptcha(task);

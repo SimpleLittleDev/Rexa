@@ -36,7 +36,8 @@ export class Orchestrator {
     private readonly memory: MemoryManager,
     private readonly agentsConfig: AgentsConfig,
     private readonly appConfig: AppConfig = defaultAppConfig(),
-    private readonly browserToolFactory: BrowserToolFactory = (options) => createBrowserTool(appConfig, options),
+    private readonly browserToolFactory: BrowserToolFactory = (options) =>
+      createBrowserTool(appConfig, { ...options, router: options?.router ?? router }),
   ) {
     this.subagents = new SubAgentManager(router);
     this.subAgentDesigner = new DynamicSubAgentDesigner(router, agentsConfig);
@@ -54,7 +55,29 @@ export class Orchestrator {
     await progress("Memahami intent dan mengambil memory relevan.");
     const plan = this.planner.createPlan(message);
     state.setPlan(plan.steps);
-    const memoryContext = await this.memory.summarize(message);
+    const chatScope = `chat:${userId}`;
+    const recentTurnsLimit = this.appConfig.tokenSaver.enabled
+      ? this.appConfig.tokenSaver.maxHistoryTurns
+      : 10;
+    const [memoryContext, recentChatTurns] = await Promise.all([
+      this.memory.summarize(message),
+      this.memory.recentTurns(chatScope, recentTurnsLimit * 2),
+    ]);
+    const chatHistory = recentChatTurns
+      .map((turn) => {
+        const speaker = turn.type === "user-turn" ? "User" : "Rexa";
+        return `${speaker}: ${turn.text}`;
+      })
+      .join("\n");
+    // Persist this turn's user message immediately so future turns see it
+    // even if the assistant turn errors out below.
+    await this.memory.remember({
+      scope: chatScope,
+      type: "user-turn",
+      text: message,
+      importance: 0.4,
+      tags: ["chat", plan.intent.type],
+    });
 
     state.transition("running");
     const role = this.appConfig.tokenSaver.enabled && this.appConfig.tokenSaver.preferCheapRole
@@ -68,13 +91,22 @@ export class Orchestrator {
 
     if (plan.intent.type === "browser") {
       const responseText = await this.executeBrowserTask(message, options);
-      await this.memory.remember({
-        scope: "task",
-        type: "task-result",
-        text: `Task ${taskId}: ${message}\nResult: ${responseText}`,
-        importance: 0.5,
-        tags: [plan.intent.type, "browser-tool"],
-      });
+      await Promise.all([
+        this.memory.remember({
+          scope: "task",
+          type: "task-result",
+          text: `Task ${taskId}: ${message}\nResult: ${responseText}`,
+          importance: 0.5,
+          tags: [plan.intent.type, "browser-tool"],
+        }),
+        this.memory.remember({
+          scope: chatScope,
+          type: "assistant-turn",
+          text: responseText,
+          importance: 0.4,
+          tags: ["chat", "browser"],
+        }),
+      ]);
       state.setResult(responseText);
       state.transition(responseText.startsWith("Browser gagal") ? "failed" : "completed");
       await progress("Task browser selesai dan evidence dikirim bila tersedia.");
@@ -121,23 +153,37 @@ export class Orchestrator {
     }
 
     const systemPrompt = this.appConfig.tokenSaver.enabled ? SYSTEM_PROMPT_LITE : SYSTEM_PROMPT;
+    const userBlock = [
+      `User request: ${message}`,
+      `Detected intent: ${plan.intent.type} (multiStep=${plan.intent.multiStep}, risk=${plan.intent.risk})`,
+      `Planner steps:\n${plan.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`,
+      `Relevant long-term memory:\n${memoryContext || "(empty)"}`,
+      `Recent conversation (last ${recentChatTurns.length} turns):\n${chatHistory || "(no prior turns)"}`,
+    ];
+    if (subagentSummary) userBlock.push(`Sub-agent results:${subagentSummary}`);
     const response = await this.router.generateForRole(role, {
       messages: [
         { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: `User request: ${message}\n\nDetected intent: ${plan.intent.type} (multiStep=${plan.intent.multiStep}, risk=${plan.intent.risk})\n\nPlanner steps:\n${plan.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n\nRelevant memory:\n${memoryContext || "(empty)"}${subagentSummary}`,
-        },
+        { role: "user", content: userBlock.join("\n\n") },
       ],
     });
 
-    await this.memory.remember({
-      scope: "task",
-      type: "task-result",
-      text: `Task ${taskId}: ${message}\nResult: ${response.text}`,
-      importance: 0.5,
-      tags: [plan.intent.type, response.provider],
-    });
+    await Promise.all([
+      this.memory.remember({
+        scope: "task",
+        type: "task-result",
+        text: `Task ${taskId}: ${message}\nResult: ${response.text}`,
+        importance: 0.5,
+        tags: [plan.intent.type, response.provider],
+      }),
+      this.memory.remember({
+        scope: chatScope,
+        type: "assistant-turn",
+        text: response.text,
+        importance: 0.4,
+        tags: ["chat", plan.intent.type, response.provider],
+      }),
+    ]);
     state.setResult(response.text);
     state.transition("completed");
     await progress("Task selesai dan memory task diperbarui.");

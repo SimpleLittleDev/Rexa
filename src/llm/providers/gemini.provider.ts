@@ -3,6 +3,8 @@ import type { LLMChunk, LLMProvider, LLMRequest, LLMResponse, LLMToolCall } from
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
+  fileData?: { mimeType: string; fileUri: string };
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: unknown };
 }
@@ -131,9 +133,23 @@ export class GeminiProvider implements LLMProvider {
         });
         continue;
       }
+      const parts: GeminiPart[] = [];
+      if (message.content) parts.push({ text: message.content });
+      if (message.attachments) {
+        for (const attachment of message.attachments) {
+          if (attachment.kind === "image") {
+            const match = /^data:(image\/[^;]+);base64,(.+)$/.exec(attachment.url);
+            if (match) {
+              parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            } else {
+              parts.push({ fileData: { mimeType: "image/png", fileUri: attachment.url } });
+            }
+          }
+        }
+      }
       contents.push({
         role: message.role === "assistant" ? "model" : "user",
-        parts: [{ text: message.content }],
+        parts: parts.length ? parts : [{ text: "" }],
       });
     }
     const body: Record<string, unknown> = {

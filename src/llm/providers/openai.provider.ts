@@ -128,7 +128,22 @@ export class OpenAIProvider implements LLMProvider {
   private buildBody(input: LLMRequest, stream: boolean): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: input.model,
-      messages: input.messages.map((m) => ({ role: m.role, content: m.content, name: m.name })),
+      messages: input.messages.map((m) => {
+        if (m.attachments && m.attachments.length > 0) {
+          const parts: Array<Record<string, unknown>> = [];
+          if (m.content) parts.push({ type: "text", text: m.content });
+          for (const attachment of m.attachments) {
+            if (attachment.kind === "image") {
+              parts.push({
+                type: "image_url",
+                image_url: { url: attachment.url, detail: attachment.detail ?? "auto" },
+              });
+            }
+          }
+          return { role: m.role, content: parts, name: m.name };
+        }
+        return { role: m.role, content: m.content, name: m.name };
+      }),
       temperature: input.temperature,
       max_tokens: input.maxTokens,
       top_p: input.topP,

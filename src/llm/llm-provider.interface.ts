@@ -1,10 +1,21 @@
 export type LLMProviderType = "api" | "cli" | "oauth" | "local";
 
+export interface LLMAttachment {
+  /** "image" is the only kind currently supported by OpenAI/Anthropic/Gemini multimodal endpoints. */
+  kind: "image";
+  /** Either a data URI (`data:image/png;base64,...`) or a remote https URL. */
+  url: string;
+  /** Optional caption / alt text. */
+  detail?: "auto" | "low" | "high";
+}
+
 export interface LLMMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   name?: string;
   toolCallId?: string;
+  /** Optional multimodal attachments (images for vision tasks). */
+  attachments?: LLMAttachment[];
 }
 
 export interface LLMToolDefinition {
