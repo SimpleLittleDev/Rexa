@@ -59,14 +59,19 @@ export class Orchestrator {
     const recentTurnsLimit = this.appConfig.tokenSaver.enabled
       ? this.appConfig.tokenSaver.maxHistoryTurns
       : 10;
-    const [memoryContext, recentChatTurns] = await Promise.all([
-      this.memory.summarize(message),
+    // Summarise long-term memory from non-chat scopes only — chat
+    // history is delivered via `recentTurns` below. Mixing the two
+    // causes exponential prompt blow-up, because each assistant turn
+    // already embeds the previous prompt's context.
+    const [taskMemory, recentChatTurns] = await Promise.all([
+      this.memory.summarize(message, { scope: "task", limit: 5 }),
       this.memory.recentTurns(chatScope, recentTurnsLimit * 2),
     ]);
+    const memoryContext = truncate(taskMemory, 1200);
     const chatHistory = recentChatTurns
       .map((turn) => {
         const speaker = turn.type === "user-turn" ? "User" : "Rexa";
-        return `${speaker}: ${turn.text}`;
+        return `${speaker}: ${truncate(turn.text, 400)}`;
       })
       .join("\n");
     // Persist this turn's user message immediately so future turns see it
@@ -95,14 +100,14 @@ export class Orchestrator {
         this.memory.remember({
           scope: "task",
           type: "task-result",
-          text: `Task ${taskId}: ${message}\nResult: ${responseText}`,
+          text: `Task ${taskId}: ${truncate(message, 500)}\nResult: ${truncate(responseText, 800)}`,
           importance: 0.5,
           tags: [plan.intent.type, "browser-tool"],
         }),
         this.memory.remember({
           scope: chatScope,
           type: "assistant-turn",
-          text: responseText,
+          text: truncate(responseText, 1500),
           importance: 0.4,
           tags: ["chat", "browser"],
         }),
@@ -172,14 +177,16 @@ export class Orchestrator {
       this.memory.remember({
         scope: "task",
         type: "task-result",
-        text: `Task ${taskId}: ${message}\nResult: ${response.text}`,
+        // Cap stored task summary to prevent it from carrying entire
+        // assistant transcripts back into future prompts.
+        text: `Task ${taskId}: ${truncate(message, 500)}\nResult: ${truncate(response.text, 800)}`,
         importance: 0.5,
         tags: [plan.intent.type, response.provider],
       }),
       this.memory.remember({
         scope: chatScope,
         type: "assistant-turn",
-        text: response.text,
+        text: truncate(response.text, 1500),
         importance: 0.4,
         tags: ["chat", plan.intent.type, response.provider],
       }),
@@ -226,6 +233,12 @@ const SYSTEM_PROMPT_LITE = [
   "Match the user's language. Skip planner steps that don't apply.",
   "Refuse irreversible actions unless explicitly confirmed.",
 ].join(" ");
+
+function truncate(text: string, max: number): string {
+  if (typeof text !== "string") return "";
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1) + "…";
+}
 
 function initialTaskState(taskId: string, userId: string): TaskState {
   return {
