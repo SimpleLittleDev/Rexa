@@ -20,6 +20,7 @@ import { MemoryStorage } from "../storage/memory.storage";
 import { PostgresStorage } from "../storage/postgres.storage";
 import { SQLiteStorage } from "../storage/sqlite.storage";
 import type { StorageAdapter } from "../storage/storage-adapter.interface";
+import { Telemetry } from "../logs/telemetry";
 
 export interface RexaRuntime {
   config: RexaConfigBundle;
@@ -27,6 +28,7 @@ export interface RexaRuntime {
   router: LLMRouter;
   memory: MemoryManager;
   storage: StorageAdapter;
+  telemetry: Telemetry;
 }
 
 export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<RexaRuntime> {
@@ -36,7 +38,27 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
   const memory = new MemoryManager(storage);
   await memory.init();
   const providers = createProviders();
-  const router = new LLMRouter(providers, config.models);
+  const telemetryConfig = {
+    ...config.app.telemetry,
+    logPath: resolveProjectPath(rootDir, config.app.telemetry.logPath),
+  };
+  const telemetry = new Telemetry(telemetryConfig);
+  const router = new LLMRouter(providers, config.models, {
+    onComplete: (info) => {
+      // Telemetry is fire-and-forget by design.
+      void telemetry.record({
+        provider: info.provider,
+        model: info.model,
+        role: info.role,
+        inputTokens: info.inputTokens,
+        outputTokens: info.outputTokens,
+        costUsd: info.costUsd,
+        success: info.success,
+        durationMs: info.durationMs,
+        error: info.error,
+      });
+    },
+  });
   const orchestrator = new Orchestrator(router, memory, config.agents, config.app);
   return {
     config,
@@ -44,6 +66,7 @@ export async function createRexaRuntime(rootDir = resolveRexaHome()): Promise<Re
     router,
     memory,
     storage,
+    telemetry,
   };
 }
 

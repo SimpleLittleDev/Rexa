@@ -22,6 +22,18 @@ export interface RouterPolicy {
   /** Notified for telemetry. */
   onAttempt?: (info: { role: string; provider: string; model: string; attempt: number }) => void;
   onError?: (info: { role: string; provider: string; model: string; error: Error }) => void;
+  /** Notified after a successful (or finally-failed) response with full usage info. */
+  onComplete?: (info: {
+    role: string;
+    provider: string;
+    model: string;
+    success: boolean;
+    durationMs: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    error?: string;
+  }) => void;
 }
 
 interface ProviderHealth {
@@ -31,7 +43,8 @@ interface ProviderHealth {
 
 export class LLMRouter {
   private readonly health = new Map<string, ProviderHealth>();
-  private readonly policy: Required<Omit<RouterPolicy, "onAttempt" | "onError">> & Pick<RouterPolicy, "onAttempt" | "onError">;
+  private readonly policy: Required<Omit<RouterPolicy, "onAttempt" | "onError" | "onComplete">> &
+    Pick<RouterPolicy, "onAttempt" | "onError" | "onComplete">;
 
   constructor(
     private readonly providers: Record<string, LLMProvider>,
@@ -45,6 +58,7 @@ export class LLMRouter {
       circuitBreakerCooldownMs: policy.circuitBreakerCooldownMs ?? 30_000,
       onAttempt: policy.onAttempt,
       onError: policy.onError,
+      onComplete: policy.onComplete,
     };
   }
 
@@ -74,14 +88,36 @@ export class LLMRouter {
 
       for (let attempt = 1; attempt <= this.policy.maxRetriesPerProvider; attempt += 1) {
         this.policy.onAttempt?.({ role, provider: candidate.provider, model: candidate.model, attempt });
+        const startedAt = Date.now();
         try {
           const response = await provider.generate({ ...request, model: candidate.model });
           this.recordSuccess(candidate.provider);
+          this.policy.onComplete?.({
+            role,
+            provider: candidate.provider,
+            model: candidate.model,
+            success: true,
+            durationMs: Date.now() - startedAt,
+            inputTokens: response.usage?.inputTokens ?? 0,
+            outputTokens: response.usage?.outputTokens ?? 0,
+            costUsd: response.usage?.costUsd ?? 0,
+          });
           return response;
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
           this.recordFailure(candidate.provider);
           this.policy.onError?.({ role, provider: candidate.provider, model: candidate.model, error: err });
+          this.policy.onComplete?.({
+            role,
+            provider: candidate.provider,
+            model: candidate.model,
+            success: false,
+            durationMs: Date.now() - startedAt,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            error: err.message,
+          });
           errors.push(`${candidate.provider}#${attempt}: ${err.message}`);
           if (attempt < this.policy.maxRetriesPerProvider) {
             await sleep(this.policy.retryBaseDelayMs * 2 ** (attempt - 1));
