@@ -178,20 +178,39 @@ function removeNodeFromTree(tree: BuilderNode[], id: string): BuilderNode[] {
     });
 }
 
+function reassignChildIds(node: BuilderNode): void {
+  if (node.children) {
+    for (const child of node.children) {
+      child.id = `${child.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      reassignChildIds(child);
+    }
+  }
+  if (node.slots) {
+    for (const slotNodes of Object.values(node.slots)) {
+      for (const child of slotNodes) {
+        child.id = `${child.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        reassignChildIds(child);
+      }
+    }
+  }
+}
+
 function duplicateNodeInTree(tree: BuilderNode[], id: string): BuilderNode[] {
   const result: BuilderNode[] = [];
   for (const node of tree) {
-    result.push(node);
     if (node.id === id) {
+      result.push(node);
       const clone = JSON.parse(JSON.stringify(node)) as BuilderNode;
       clone.id = `${node.id}-copy-${Date.now()}`;
       clone.name = `${node.name} (Copy)`;
+      reassignChildIds(clone);
       result.push(clone);
     } else {
-      const last = result[result.length - 1];
-      if (last.children) {
-        last.children = duplicateNodeInTree(last.children, id);
+      const shallow = { ...node };
+      if (shallow.children) {
+        shallow.children = duplicateNodeInTree(shallow.children, id);
       }
+      result.push(shallow);
     }
   }
   return result;
